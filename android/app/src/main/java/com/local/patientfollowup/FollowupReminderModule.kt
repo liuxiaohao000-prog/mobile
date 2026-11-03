@@ -12,12 +12,6 @@ import android.media.AudioAttributes
 import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Build
-import android.os.Handler
-import android.os.Looper
-import android.os.VibrationAttributes
-import android.os.VibrationEffect
-import android.os.Vibrator
-import android.os.VibratorManager
 import android.provider.Settings
 import android.util.Log
 import androidx.core.app.AlarmManagerCompat
@@ -163,8 +157,16 @@ class FollowupReminderReceiver : BroadcastReceiver() {
     val finished = AtomicBoolean(false)
     val finish = { if (finished.compareAndSet(false, true)) pending.finish() }
     try {
-      if (action == ACTION_TEST_ALARM) LocalFollowupAlarm.deliverTestReminder(context, finish)
-      else LocalFollowupAlarm.deliverAndContinue(context, finish)
+      when (action) {
+        ACTION_TEST_ALARM -> LocalFollowupAlarm.deliverTestReminder(context, finish)
+        ACTION_FOLLOWUP_ALARM -> LocalFollowupAlarm.deliverAndContinue(context, finish)
+        // Reboot, timezone changes and package updates must only re-arm the
+        // next alarm. They must not create a surprise notification at 2 AM.
+        else -> {
+          LocalFollowupAlarm.scheduleFromSavedState(context)
+          finish()
+        }
+      }
     } catch (error: Throwable) {
       Log.e("FollowupReminder", "Unable to deliver or reschedule reminder", error)
       finish()
@@ -173,8 +175,9 @@ class FollowupReminderReceiver : BroadcastReceiver() {
 }
 
 private object LocalFollowupAlarm {
-  // 2.8 seconds total, with 2.4 seconds of vibration pulses.
-  private val reminderVibrationPattern = longArrayOf(0, 800, 200, 800, 200, 800)
+  // Ordinary notification vibration follows the notification-channel setting.
+  // Sustained, bounded alarm haptics are owned by FollowupVibrationService.
+  private val reminderVibrationPattern = longArrayOf(0, 550, 280, 550)
 
   fun sync(context: Context, earliestOpenDate: String?, forceReschedule: Boolean) {
     val normalizedDate = earliestOpenDate?.also { LocalDate.parse(it) }
@@ -369,47 +372,25 @@ private object LocalFollowupAlarm {
       onFinished?.invoke()
       return false
     }
-    if (!scheduleOnePlusVibration(context, vibrationEnabled, onFinished)) onFinished?.invoke()
-    return vibrationEnabled
-  }
-
-  private fun scheduleOnePlusVibration(
-    context: Context,
-    vibrationEnabled: Boolean,
-    onFinished: (() -> Unit)?,
-  ): Boolean {
-    if (!Build.MANUFACTURER.equals("OnePlus", ignoreCase = true) || !vibrationEnabled) return false
-
-    val handler = Handler(Looper.getMainLooper())
-    handler.postDelayed({
-      var started = false
+    // Do not keep the BroadcastReceiver alive via Handler.postDelayed:
+    // a receiver is not a reliable place to play long haptics under Doze.
+    // A real alarm is allowed to start a short, user-dismissible foreground
+    // service if the app currently holds its exact-alarm permission.
+    if (vibrationEnabled && (Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+        (context.getSystemService(Context.ALARM_SERVICE) as AlarmManager).canScheduleExactAlarms())) {
       try {
-        val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-          (context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager).defaultVibrator
-        } else {
-          @Suppress("DEPRECATION")
-          (context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator)
-        }
-        if (vibrator.hasVibrator()) {
-          val effect = VibrationEffect.createWaveform(reminderVibrationPattern, -1)
-          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            vibrator.vibrate(effect, VibrationAttributes.createForUsage(VibrationAttributes.USAGE_ALARM))
-          } else {
-            @Suppress("DEPRECATION")
-            vibrator.vibrate(effect, AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ALARM).build())
-          }
-          started = true
-        }
+        androidx.core.content.ContextCompat.startForegroundService(
+          context,
+          Intent(context, FollowupVibrationService::class.java),
+        )
       } catch (error: Throwable) {
-        Log.w("FollowupReminder", "Unable to play extended vibration", error)
+        // The notification was already published; do not lose the reminder
+        // if a manufacturer forbids the optional foreground service.
+        Log.w("FollowupReminder", "Extended vibration unavailable; delivered notification only", error)
       }
-      if (onFinished != null) {
-        if (started) handler.postDelayed({ onFinished() }, 2_900L) else onFinished()
-      }
-    // ColorOS can play the channel's short haptic several hundred milliseconds after notify().
-    // Wait for that system effect to finish so it does not cancel this longer waveform.
-    }, 1_200L)
-    return true
+    }
+    onFinished?.invoke()
+    return vibrationEnabled
   }
 
   private fun testAlarmPendingIntent(context: Context): PendingIntent = PendingIntent.getBroadcast(
