@@ -3,8 +3,8 @@ import { Linking, NativeModules, Platform } from 'react-native';
 import { getTasks } from '../storage/repository';
 import { dateKey } from '../domain/dates';
 
-const CHANNEL_ID = 'followup-reminders-v3';
-const VIBRATION_PATTERN = [0, 800, 200, 800, 200, 800];
+const CHANNEL_ID = 'followup-reminders-v4';
+const VIBRATION_PATTERN = [0, 600, 250, 600, 350, 600, 250, 600, 350, 600];
 const SCHEDULE_WINDOW_DAYS = 30;
 const MAX_SCHEDULED_REMINDERS = 55;
 export type ReminderDiagnostics = {
@@ -13,6 +13,12 @@ export type ReminderDiagnostics = {
   highImportance: boolean;
   vibrationEnabled: boolean;
   backgroundRestricted: boolean;
+  notificationsEnabled: boolean;
+  exactAlarmAllowed: boolean;
+  channelImportance: number;
+  testNotificationPostedAt: number;
+  testVibrationStartedAt: number;
+  testError: string;
 };
 const followupReminderModule = NativeModules.FollowupReminder as
   | {
@@ -101,6 +107,14 @@ export async function sendTestNotificationNow(): Promise<boolean> {
 export async function scheduleTestNotificationInOneMinute(): Promise<boolean> {
   const granted = await requestNotificationPermission();
   if (!granted) throw new Error('请先允许系统通知，再进行通知测试。');
+  // A precise 60-second test must not silently degrade into an indefinite
+  // Doze-batched reminder when SCHEDULE_EXACT_ALARM is not granted.
+  if (Platform.OS === 'android' && !(await getExactAlarmPermission())) {
+    await requestExactAlarmPermission();
+    if (!(await getExactAlarmPermission())) {
+      throw new Error('请在系统「闹钟和提醒」页面允许研伴，再回到这里重新安排一分钟测试。');
+    }
+  }
   const scheduled = await Notifications.getAllScheduledNotificationsAsync();
   for (const request of scheduled) {
     if (request.content.data?.kind === 'notification-test') {

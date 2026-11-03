@@ -10,6 +10,7 @@
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SYSTEM_EXEMPTED"/>
   <uses-permission android:name="android.permission.VIBRATE"/>
+  <uses-permission android:name="android.permission.WAKE_LOCK"/>
   <queries>
     <intent>
       <action android:name="android.intent.action.VIEW"/>
@@ -30,7 +31,7 @@
         <action android:name="android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED"/>
       </intent-filter>
     </receiver>
-    <meta-data android:name="com.google.firebase.messaging.default_notification_channel_id" android:value="followup-reminders-v3"/>
+    <meta-data android:name="com.google.firebase.messaging.default_notification_channel_id" android:value="followup-reminders-v4"/>
     <meta-data android:name="expo.modules.updates.ENABLED" android:value="false"/>
     <meta-data android:name="expo.modules.updates.ENABLE_BSDIFF_PATCH_SUPPORT" android:value="true"/>
     <meta-data android:name="expo.modules.updates.EXPO_UPDATES_CHECK_ON_LAUNCH" android:value="ALWAYS"/>

@@ -1726,6 +1726,7 @@ function SettingsPage({ onRefresh }: Props) {
   const [exactAlarmGranted, setExactAlarmGranted] = useState(false);
   const [reminderDiagnostics, setReminderDiagnostics] = useState<ReminderDiagnostics | null>(null);
   const [reminderDetailsOpen, setReminderDetailsOpen] = useState(false);
+  const [testFeedback, setTestFeedback] = useState('');
   const [backupDetailsOpen, setBackupDetailsOpen] = useState(false);
   const [aiDetailsOpen, setAiDetailsOpen] = useState(false);
   const [operatorDetailsOpen, setOperatorDetailsOpen] = useState(false);
@@ -1840,6 +1841,7 @@ function SettingsPage({ onRefresh }: Props) {
     }
   };
   const testNotification = async (delayed: boolean) => {
+    setTestFeedback('');
     try {
       if (delayed) {
         const exactDelivery = await scheduleTestNotificationInOneMinute();
@@ -1849,22 +1851,22 @@ function SettingsPage({ onRefresh }: Props) {
           Platform.OS !== 'android'
             ? '约 1 分钟后触发。你可以返回桌面等待系统通知。'
             : exactDelivery
-              ? '已交给 Android 系统闹钟；返回桌面或划掉最近任务后仍会尝试触发。'
-              : '当前未授权精确闹钟，Android 会尽力安排，可能延迟。请先开启“精确提醒”以测试准时触发。',
+              ? '已交给系统精确闹钟。请返回桌面或从最近任务划掉 App，再检查通知横幅和五秒震动。系统设置中的「强行停止」不属于该测试。'
+              : '当前没有精确闹钟权限，请先授权后重试。',
         );
       } else {
         const vibrationEnabled = await sendTestNotificationNow();
-        if (vibrationEnabled) {
-          Alert.alert('测试通知已发送', '请查看横幅或通知中心。振动仍受手机静音、勿扰和系统设置影响。');
-        } else {
-          Alert.alert(
-            '通知已发送，渠道振动已关闭',
-            '请到“系统设置 → 应用 → 研伴 → 通知 → 患者随访提醒”开启振动，再重新测试。',
-          );
-        }
+        // Do not show a modal Alert here: it can cover the very heads-up
+        // notification the user is trying to test on the foreground screen.
+        setTestFeedback(vibrationEnabled
+          ? '即时测试已发送：请观察顶部横幅与约 5 秒震动。'
+          : '当前提醒渠道的震动被关闭。请打开系统通知渠道启用震动。');
+        await refreshNotificationPermissions();
       }
     } catch (error) {
-      Alert.alert('通知测试未完成', error instanceof Error ? error.message : '请检查系统通知权限后重试。');
+      const message = error instanceof Error ? error.message : '请检查系统通知权限后重试。';
+      setTestFeedback(message);
+      Alert.alert('通知测试未完成', message);
     }
   };
   const openNotificationSettings = async () => {
@@ -1959,19 +1961,29 @@ function SettingsPage({ onRefresh }: Props) {
                     {' · '}震动：{reminderDiagnostics ? reminderDiagnostics.vibrationEnabled ? '已开启' : '未开启' : '未读取'}
                   </Text>
                   <Text style={styles.helperText}>后台限制：{reminderDiagnostics ? reminderDiagnostics.backgroundRestricted ? '系统已限制' : '未报告限制' : '未知'}</Text>
+                  <Text style={styles.helperText}>系统通知：{reminderDiagnostics?.notificationsEnabled ? '允许' : '受限'} · 通道重要级别：{reminderDiagnostics?.channelImportance ?? '未知'}（横幅需要至少 4）</Text>
                 </>
               ) : null}
               {reminderDiagnostics && reminderDiagnostics.testScheduledAt > 0 ? (
                 <Text style={styles.helperText}>
                   上次延迟测试：{reminderDiagnostics.testTriggeredAt > 0
-                    ? '已触发'
-                    : '等待系统触发'}
+                    ? '闹钟已触发'
+                    : '等待闹钟触发'}
+                  {' · '}通知：{reminderDiagnostics.testNotificationPostedAt > 0 ? '已发布' : '未确认'}
+                  {' · '}震动：{reminderDiagnostics.testVibrationStartedAt > 0 ? '已发起' : '未确认'}
                 </Text>
               ) : null}
+              {reminderDiagnostics?.testError ? (
+                <Text style={[styles.helperText, { color: theme.danger }]}>上次测试错误：{reminderDiagnostics.testError}</Text>
+              ) : null}
+              {testFeedback ? <Text style={styles.helperText}>{testFeedback}</Text> : null}
+              <Text style={styles.helperText}>测试方式：安排后返回桌面或划掉最近任务，约一分钟后应显示横幅并震动 5 秒；不要在系统设置中强行停止应用。</Text>
               <View style={{ height: 12 }} />
-              <PrimaryButton title="立即测试通知" onPress={() => void testNotification(false)} secondary disabled={!notificationGranted} />
+              <PrimaryButton title="立即测试通知（震动 5 秒）" onPress={() => void testNotification(false)} secondary disabled={!notificationGranted} />
               <View style={{ height: 8 }} />
-              <PrimaryButton title="一分钟后熄屏测试" onPress={() => void testNotification(true)} secondary disabled={!notificationGranted} />
+              <PrimaryButton title="一分钟后后台 / 熄屏测试" onPress={() => void testNotification(true)} secondary disabled={!notificationGranted} />
+              <View style={{ height: 8 }} />
+              <PrimaryButton title="刷新本次测试结果" onPress={() => void refreshNotificationPermissions()} secondary />
               {Platform.OS === 'android' ? (
                 <>
                   <View style={{ height: 8 }} />
@@ -2030,7 +2042,7 @@ function SettingsPage({ onRefresh }: Props) {
           expanded={aboutDetailsOpen}
           onToggle={() => setAboutDetailsOpen((value) => !value)}
         >
-          <InfoLine label="应用版本" value="2.0.0-preview" />
+          <InfoLine label="应用版本" value="2.0.1-preview" />
           <InfoLine label="研究方案" value={STUDY_PROTOCOL_VERSION} />
           <Text style={styles.helperText}>AI 用于辅助预筛。正式入组仍需要授权人员人工核实。</Text>
         </SettingsDisclosure>

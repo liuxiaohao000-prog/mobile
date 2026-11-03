@@ -30,13 +30,16 @@ import java.time.LocalDateTime
 import java.time.ZoneId
 import java.util.concurrent.atomic.AtomicBoolean
 
-private const val REMINDER_PREFS = "patient_followup_reminder"
+internal const val REMINDER_PREFS = "patient_followup_reminder"
 private const val KEY_EARLIEST_OPEN_DATE = "earliest_open_date"
 private const val KEY_TEST_SCHEDULED_AT = "test_scheduled_at"
-private const val KEY_TEST_TRIGGERED_AT = "test_triggered_at"
-private const val ACTION_FOLLOWUP_ALARM = "com.local.patientfollowup.FOLLOWUP_ALARM"
-private const val ACTION_TEST_ALARM = "com.local.patientfollowup.TEST_ALARM"
-private const val FOLLOWUP_CHANNEL_ID = "followup-reminders-v3"
+internal const val KEY_TEST_TRIGGERED_AT = "test_triggered_at"
+internal const val KEY_TEST_NOTIFIED_AT = "test_notified_at"
+internal const val KEY_TEST_VIBRATION_AT = "test_vibration_at"
+internal const val KEY_TEST_ERROR = "test_error"
+internal const val ACTION_FOLLOWUP_ALARM = "com.local.patientfollowup.FOLLOWUP_ALARM"
+internal const val ACTION_TEST_ALARM = "com.local.patientfollowup.TEST_ALARM"
+internal const val FOLLOWUP_CHANNEL_ID = "followup-reminders-v4"
 private const val ALARM_REQUEST_CODE = 27110
 private const val NOTIFICATION_ID = 27111
 private const val TEST_ALARM_REQUEST_CODE = 27112
@@ -79,6 +82,13 @@ class FollowupReminderModule(
         putBoolean("highImportance", channel != null && channel.importance >= NotificationManager.IMPORTANCE_HIGH)
         putBoolean("vibrationEnabled", channel?.shouldVibrate() ?: false)
         putBoolean("backgroundRestricted", activityManager.isBackgroundRestricted)
+        putBoolean("notificationsEnabled", NotificationManagerCompat.from(reactContext).areNotificationsEnabled())
+        putBoolean("exactAlarmAllowed", Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+          (reactContext.getSystemService(Context.ALARM_SERVICE) as AlarmManager).canScheduleExactAlarms())
+        putDouble("testNotificationPostedAt", preferences.getLong(KEY_TEST_NOTIFIED_AT, 0L).toDouble())
+        putDouble("testVibrationStartedAt", preferences.getLong(KEY_TEST_VIBRATION_AT, 0L).toDouble())
+        putString("testError", preferences.getString(KEY_TEST_ERROR, "") ?: "")
+        putDouble("channelImportance", (channel?.importance ?: 0).toDouble())
       }
       promise.resolve(result)
     } catch (error: Throwable) {
@@ -174,10 +184,10 @@ class FollowupReminderReceiver : BroadcastReceiver() {
   }
 }
 
-private object LocalFollowupAlarm {
+internal object LocalFollowupAlarm {
   // Ordinary notification vibration follows the notification-channel setting.
   // Sustained, bounded alarm haptics are owned by FollowupVibrationService.
-  private val reminderVibrationPattern = longArrayOf(0, 550, 280, 550)
+  private val reminderVibrationPattern = longArrayOf(0, 300, 180, 300)
 
   fun sync(context: Context, earliestOpenDate: String?, forceReschedule: Boolean) {
     val normalizedDate = earliestOpenDate?.also { LocalDate.parse(it) }
@@ -192,7 +202,7 @@ private object LocalFollowupAlarm {
     scheduleFromSavedState(context)
   }
 
-  fun deliverAndContinue(context: Context, onFinished: () -> Unit) {
+  fun deliverAndContinue(context: Context, onFinished: () -> Unit, inService: Boolean = false) {
     val earliestOpenDate = context.getSharedPreferences(REMINDER_PREFS, Context.MODE_PRIVATE)
       .getString(KEY_EARLIEST_OPEN_DATE, null)
       ?: run { onFinished(); return }
@@ -201,7 +211,7 @@ private object LocalFollowupAlarm {
     val reminderTimePassed = !java.time.LocalTime.now().isBefore(java.time.LocalTime.of(9, 0))
     scheduleFromSavedState(context)
     if (dueDate.isBefore(today) || (dueDate == today && reminderTimePassed)) {
-      postReminder(context, onFinished)
+      postReminder(context, onFinished, inService)
     } else {
       onFinished()
     }
@@ -212,11 +222,14 @@ private object LocalFollowupAlarm {
     val preferences = context.getSharedPreferences(REMINDER_PREFS, Context.MODE_PRIVATE)
     val earliestOpenDate = preferences.getString(KEY_EARLIEST_OPEN_DATE, null)
     val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-    val operation = alarmPendingIntent(context)
-
+    val exactAllowed = Build.VERSION.SDK_INT < Build.VERSION_CODES.S || alarmManager.canScheduleExactAlarms()
+    val foregroundOperation = alarmPendingIntent(context, true)
+    val receiverOperation = alarmPendingIntent(context, false)
+    alarmManager.cancel(foregroundOperation)
+    alarmManager.cancel(receiverOperation)
     if (earliestOpenDate == null) {
-      alarmManager.cancel(operation)
-      operation.cancel()
+      foregroundOperation.cancel()
+      receiverOperation.cancel()
       return
     }
 
@@ -236,7 +249,7 @@ private object LocalFollowupAlarm {
         .toEpochMilli()
     }
 
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S || alarmManager.canScheduleExactAlarms()) {
+    if (exactAllowed) {
       val showIntent = context.packageManager.getLaunchIntentForPackage(context.packageName)?.let {
         PendingIntent.getActivity(
           context,
@@ -245,25 +258,22 @@ private object LocalFollowupAlarm {
           PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
       }
-      alarmManager.setAlarmClock(AlarmManager.AlarmClockInfo(triggerAtMillis, showIntent), operation)
+      alarmManager.setAlarmClock(AlarmManager.AlarmClockInfo(triggerAtMillis, showIntent), foregroundOperation)
     } else {
-      AlarmManagerCompat.setAndAllowWhileIdle(
-        alarmManager,
-        AlarmManager.RTC_WAKEUP,
-        triggerAtMillis,
-        operation,
-      )
+      AlarmManagerCompat.setAndAllowWhileIdle(alarmManager, AlarmManager.RTC_WAKEUP, triggerAtMillis, receiverOperation)
     }
   }
 
-  private fun alarmPendingIntent(context: Context): PendingIntent = PendingIntent.getBroadcast(
-    context,
-    ALARM_REQUEST_CODE,
-    Intent(context, FollowupReminderReceiver::class.java).setAction(ACTION_FOLLOWUP_ALARM),
-    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-  )
+  private fun alarmPendingIntent(context: Context, foreground: Boolean): PendingIntent {
+    val intent = if (foreground) Intent(context, FollowupVibrationService::class.java)
+    else Intent(context, FollowupReminderReceiver::class.java)
+    intent.action = ACTION_FOLLOWUP_ALARM
+    val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+    return if (foreground) PendingIntent.getForegroundService(context, ALARM_REQUEST_CODE, intent, flags)
+    else PendingIntent.getBroadcast(context, ALARM_REQUEST_CODE, intent, flags)
+  }
 
-  private fun postReminder(context: Context, onFinished: () -> Unit) {
+  private fun postReminder(context: Context, onFinished: () -> Unit, inService: Boolean = false) {
     // Production and test reminders use the same notification and vibration path.
     postNotification(
       context,
@@ -271,31 +281,37 @@ private object LocalFollowupAlarm {
       "患者随访提醒",
       "请打开研伴查看尚未完成的电话随访任务。",
       onFinished,
+      inService,
     )
   }
 
-  fun postTestReminder(context: Context, onFinished: (() -> Unit)? = null): Boolean = postNotification(
+  fun postTestReminder(context: Context, onFinished: (() -> Unit)? = null, inService: Boolean = false): Boolean = postNotification(
     context,
     TEST_NOTIFICATION_ID,
     "随访提醒测试",
-    "这是一条系统闹钟触发的测试通知。请观察弹窗和震动。",
+    "这是一条系统闹钟触发的测试通知。请观察横幅和震动。",
     onFinished,
+    inService,
   )
 
-  fun deliverTestReminder(context: Context, onFinished: () -> Unit) {
+  fun deliverTestReminder(context: Context, onFinished: () -> Unit, inService: Boolean = false) {
     context.getSharedPreferences(REMINDER_PREFS, Context.MODE_PRIVATE)
       .edit().putLong(KEY_TEST_TRIGGERED_AT, System.currentTimeMillis()).commit()
-    postTestReminder(context, onFinished)
+    postTestReminder(context, onFinished, inService)
   }
 
   fun scheduleTestReminder(context: Context): Boolean {
     ensureNotificationChannel(context)
     val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-    val operation = testAlarmPendingIntent(context)
+    val operation = testAlarmPendingIntent(context, true)
+    val legacyOperation = testAlarmPendingIntent(context, false)
     alarmManager.cancel(operation)
-
-    val triggerAtMillis = System.currentTimeMillis() + 60_000L
+    alarmManager.cancel(legacyOperation)
     val exactAlarmAllowed = Build.VERSION.SDK_INT < Build.VERSION_CODES.S || alarmManager.canScheduleExactAlarms()
+    if (!exactAlarmAllowed) {
+      throw IllegalStateException("请先为研伴开启系统「闹钟和提醒」权限，再执行一分钟准点测试。")
+    }
+    val triggerAtMillis = System.currentTimeMillis() + 60_000L
     if (exactAlarmAllowed) {
       val showIntent = context.packageManager.getLaunchIntentForPackage(context.packageName)?.let {
         PendingIntent.getActivity(
@@ -306,19 +322,15 @@ private object LocalFollowupAlarm {
         )
       }
       alarmManager.setAlarmClock(AlarmManager.AlarmClockInfo(triggerAtMillis, showIntent), operation)
-    } else {
-      AlarmManagerCompat.setAndAllowWhileIdle(
-        alarmManager,
-        AlarmManager.RTC_WAKEUP,
-        triggerAtMillis,
-        operation,
-      )
     }
     context.getSharedPreferences(REMINDER_PREFS, Context.MODE_PRIVATE).edit()
       .putLong(KEY_TEST_SCHEDULED_AT, triggerAtMillis)
       .remove(KEY_TEST_TRIGGERED_AT)
+      .remove(KEY_TEST_NOTIFIED_AT)
+      .remove(KEY_TEST_VIBRATION_AT)
+      .remove(KEY_TEST_ERROR)
       .commit()
-    return exactAlarmAllowed
+    return true
   }
 
   private fun postNotification(
@@ -327,6 +339,7 @@ private object LocalFollowupAlarm {
     title: String,
     body: String,
     onFinished: (() -> Unit)? = null,
+    inService: Boolean = false,
   ): Boolean {
     ensureNotificationChannel(context)
     if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) {
@@ -352,7 +365,9 @@ private object LocalFollowupAlarm {
       .setCategory(NotificationCompat.CATEGORY_ALARM)
       .setPriority(NotificationCompat.PRIORITY_MAX)
       .setContentIntent(clickPendingIntent)
+      .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
       .setAutoCancel(true)
+      .setOnlyAlertOnce(false)
       .setVibrate(reminderVibrationPattern)
       .build()
 
@@ -367,6 +382,10 @@ private object LocalFollowupAlarm {
       // A fresh notification can alert again when yesterday's reminder is still in the shade.
       manager.cancel(notificationId)
       manager.notify(notificationId, notification)
+      if (notificationId == TEST_NOTIFICATION_ID) {
+        context.getSharedPreferences(REMINDER_PREFS, Context.MODE_PRIVATE).edit()
+          .putLong(KEY_TEST_NOTIFIED_AT, System.currentTimeMillis()).apply()
+      }
     } catch (_: SecurityException) {
       // The OS may revoke notification permission while the scheduled alarm remains.
       onFinished?.invoke()
@@ -376,7 +395,7 @@ private object LocalFollowupAlarm {
     // a receiver is not a reliable place to play long haptics under Doze.
     // A real alarm is allowed to start a short, user-dismissible foreground
     // service if the app currently holds its exact-alarm permission.
-    if (vibrationEnabled && (Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+    if (!inService && vibrationEnabled && (Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
         (context.getSystemService(Context.ALARM_SERVICE) as AlarmManager).canScheduleExactAlarms())) {
       try {
         androidx.core.content.ContextCompat.startForegroundService(
@@ -393,12 +412,14 @@ private object LocalFollowupAlarm {
     return vibrationEnabled
   }
 
-  private fun testAlarmPendingIntent(context: Context): PendingIntent = PendingIntent.getBroadcast(
-    context,
-    TEST_ALARM_REQUEST_CODE,
-    Intent(context, FollowupReminderReceiver::class.java).setAction(ACTION_TEST_ALARM),
-    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-  )
+  private fun testAlarmPendingIntent(context: Context, foreground: Boolean): PendingIntent {
+    val intent = if (foreground) Intent(context, FollowupVibrationService::class.java)
+    else Intent(context, FollowupReminderReceiver::class.java)
+    intent.action = ACTION_TEST_ALARM
+    val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+    return if (foreground) PendingIntent.getForegroundService(context, TEST_ALARM_REQUEST_CODE, intent, flags)
+    else PendingIntent.getBroadcast(context, TEST_ALARM_REQUEST_CODE, intent, flags)
+  }
 
   fun ensureNotificationChannel(context: Context) {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
@@ -412,10 +433,12 @@ private object LocalFollowupAlarm {
     ).apply {
       setVibrationPattern(reminderVibrationPattern)
       enableVibration(true)
+      lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
+      description = "重要随访提醒。横幅显示取决于系统通知和勿扰设置。"
       setSound(
         RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION),
         AudioAttributes.Builder()
-          .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+          .setUsage(AudioAttributes.USAGE_NOTIFICATION_EVENT)
           .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
           .build(),
       )

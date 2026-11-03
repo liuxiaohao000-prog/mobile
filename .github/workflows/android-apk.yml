@@ -57,9 +57,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="v2.0.0-preview.${GITHUB_RUN_NUMBER}"
+          TAG="v2.0.1-preview.${GITHUB_RUN_NUMBER}"
           gh release create "$TAG" dist/yanban-v2-preview.apk \
             --target "${GITHUB_SHA}" \
-            --title "研伴 V2.0 Preview ${GITHUB_RUN_NUMBER}" \
+            --title "研伴 V2.0.1 Preview ${GITHUB_RUN_NUMBER}" \
             --notes "自动构建的测试版。尚未完成真实手机的通知、震动和数据库升级验证。升级前请确认已有可靠备份，切勿卸载旧版。" \
             --prerelease
