@@ -1,0 +1,60 @@
+name: Android APK
+on:
+  push:
+    branches:
+      - main
+      - 'v2/**'
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Typecheck and build APK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK packages
+        run: |
+          sdkmanager --install "platforms;android-37" "build-tools;37.0.0" "ndk;27.1.12297006"
+          yes | sdkmanager --licenses || true
+      - name: Build signed preview APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:assembleRelease --no-daemon --stacktrace
+      - name: Copy APK
+        run: |
+          mkdir -p dist
+          cp android/app/build/outputs/apk/release/app-release.apk dist/yanban-v2-preview.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: yanban-v2-preview-apk
+          path: dist/yanban-v2-preview.apk
+          if-no-files-found: error
+          retention-days: 14
+      - name: Publish GitHub prerelease APK
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/v2/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v2.0.0-preview.${GITHUB_RUN_NUMBER}"
+          gh release create "$TAG" dist/yanban-v2-preview.apk \
+            --target "${GITHUB_SHA}" \
+            --title "研伴 V2.0 Preview ${GITHUB_RUN_NUMBER}" \
+            --notes "自动构建的测试版。尚未完成真实手机的通知、震动和数据库升级验证。升级前请确认已有可靠备份，切勿卸载旧版。" \
+            --prerelease
