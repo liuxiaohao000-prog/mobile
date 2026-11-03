@@ -90,6 +90,7 @@ import {
   setBackgroundMonitorEnabled,
   syncBackgroundMonitorSnapshot,
   restoreBackgroundMonitorIfEnabled,
+  openMonitorNotificationSettings,
   type BackgroundMonitorState,
 } from './services/backgroundMonitor';
 import { dateKey, formatLocalDateTime, parseLocalDate, parseLocalDateTime } from './domain/dates';
@@ -1987,20 +1988,34 @@ function SettingsPage({ onRefresh }: Props) {
                 </View>
                 <Switch
                   value={monitorState.enabled}
-                  disabled={monitorBusy || !notificationGranted}
+                  disabled={monitorBusy || (!notificationGranted && Number(Platform.Version) < 33)}
                   onValueChange={(value) => void toggleMonitor(value)}
                   accessibilityLabel="后台随访监测"
                 />
               </View>
               <Text style={styles.helperText}>
-                折叠时简洁显示，展开可查看今日待随访、今日完成和总入组三项数据。后台不轮询、不联网；重启或升级后尝试恢复，随时可关闭。
+                守护服务现在运行在独立原生进程中；划掉最近任务不会主动停止它。统计仅在数据变化时同步，不联网、不轮询。可单独隐藏监测通知，而不停止后台服务。
               </Text>
               {!notificationGranted ? (
-                <Text style={styles.helperText}>需要先在上方允许研伴发送通知。</Text>
+                <Text style={styles.helperText}>通知权限未授权：Android 13+ 的监测服务仍可运行，但正式随访提醒横幅会被屏蔽，请恢复通知权限。</Text>
               ) : null}
               {monitorState.lastError ? (
                 <Text style={[styles.helperText, { color: theme.danger }]}>运行异常：{monitorState.lastError}</Text>
               ) : null}
+              {monitorState.enabled ? (
+                <View style={{ marginTop: 8 }}>
+                  <PrimaryButton
+                    title="监测通知显示设置（可以单独隐藏）"
+                    onPress={() => void openMonitorNotificationSettings().catch((error) =>
+                      Alert.alert('无法打开监测通知设置', error instanceof Error ? error.message : '请手动打开系统通知设置。'))}
+                    secondary
+                  />
+                  <Text style={styles.helperText}>
+                    可以长按监测通知，仅关闭「随访后台监测」渠道的展示，不会主动停止守护服务。不要关闭整个研伴的通知权限，否则正式提醒横幅也会消失。Android 系统的「停止应用」操作仍会终止后台运行。
+                  </Text>
+                </View>
+              ) : null}
+
               {monitorState.enabled && monitorState.lastStartedAt > 0 ? (
                 <Text style={styles.helperText}>
                   上次启动：{new Date(monitorState.lastStartedAt).toLocaleString('zh-CN', { hour12: false })}
@@ -2042,9 +2057,9 @@ function SettingsPage({ onRefresh }: Props) {
               ) : null}
               {reminderDiagnostics && reminderDiagnostics.testScheduledAt > 0 ? (
                 <Text style={styles.helperText}>
-                  上次延迟测试：{reminderDiagnostics.testReceiverReceivedAt > 0
-                    ? '系统已投递广播'
-                    : '尚未收到系统广播'}
+                  上次延迟测试：{reminderDiagnostics.testServiceEnteredAt > 0 || reminderDiagnostics.testReceiverReceivedAt > 0
+                    ? '原生提醒已执行'
+                    : '系统尚未投递提醒'}
                   {' · '}通知：{reminderDiagnostics.testNotificationPostedAt > 0 ? '已发布' : '未确认'}
                   {' · '}震动：{reminderDiagnostics.testVibrationStartedAt > 0 ? '已发起' : '未确认'}
                 </Text>
@@ -2052,17 +2067,16 @@ function SettingsPage({ onRefresh }: Props) {
               {reminderDiagnostics && reminderDiagnostics.testScheduledAt > 0 ? (
                 <>
                   <Text style={styles.helperText}>计划触发：{new Date(reminderDiagnostics.testScheduledAt).toLocaleString('zh-CN', { hour12: false })}</Text>
-                  {reminderDiagnostics.testReceiverReceivedAt > 0 ? (
+                  {reminderDiagnostics.testServiceEnteredAt > 0 || reminderDiagnostics.testReceiverReceivedAt > 0 ? (
                     <Text style={styles.helperText}>
-                      实际广播：{new Date(reminderDiagnostics.testReceiverReceivedAt).toLocaleString('zh-CN', { hour12: false })}
-                      {' · '}较计划延迟 {Math.max(0, Math.round((reminderDiagnostics.testReceiverReceivedAt - reminderDiagnostics.testScheduledAt) / 1000))} 秒
+                      原生入口到达：{new Date(reminderDiagnostics.testServiceEnteredAt > 0
+                        ? reminderDiagnostics.testServiceEnteredAt : reminderDiagnostics.testReceiverReceivedAt).toLocaleString('zh-CN', { hour12: false })}
+                      {' · '}较计划延迟 {Math.max(0, Math.round(((reminderDiagnostics.testServiceEnteredAt > 0
+                        ? reminderDiagnostics.testServiceEnteredAt : reminderDiagnostics.testReceiverReceivedAt) - reminderDiagnostics.testScheduledAt) / 1000))} 秒
                     </Text>
                   ) : (
-                    <Text style={styles.helperText}>尚无广播记录；若已超过计划时间，说明系统未按计划投递给 App，或 App 被系统强行停止。</Text>
+                    <Text style={styles.helperText}>目标组件尚无到达记录：可能是系统取消或推迟了闹钟，不能仅凭此认定震动执行失败。</Text>
                   )}
-                  {reminderDiagnostics.testTriggeredAt > 0 && reminderDiagnostics.testReceiverReceivedAt === 0 ? (
-                    <Text style={styles.helperText}>检测到旧版前台服务触发记录，但没有广播入口记录。</Text>
-                  ) : null}
                 </>
               ) : null}
               {Platform.OS === 'android' && monitorState.enabled ? (
@@ -2080,7 +2094,7 @@ function SettingsPage({ onRefresh }: Props) {
                 <Text style={[styles.helperText, { color: theme.danger }]}>上次测试错误：{reminderDiagnostics.testError}</Text>
               ) : null}
               {testFeedback ? <Text style={styles.helperText}>{testFeedback}</Text> : null}
-              <Text style={styles.helperText}>测试方式：安排后返回桌面或锁屏；可测试划掉最近任务，但部分一加系统会将此操作视作强行停止。约一分钟后应显示横幅并震动 5 秒。</Text>
+              <Text style={styles.helperText}>当前使用系统精确闹钟直接启动原生提醒服务；划掉最近任务后应仍可投递。请测试亮屏、熄屏及划掉任务；如被系统强行停止，Android 无法保证提醒。</Text>
               <View style={{ height: 12 }} />
               <PrimaryButton title="立即测试通知（震动 5 秒）" onPress={() => void testNotification(false)} secondary disabled={!notificationGranted} />
               <View style={{ height: 8 }} />
@@ -2145,7 +2159,7 @@ function SettingsPage({ onRefresh }: Props) {
           expanded={aboutDetailsOpen}
           onToggle={() => setAboutDetailsOpen((value) => !value)}
         >
-          <InfoLine label="应用版本" value="2.0.4-preview" />
+          <InfoLine label="应用版本" value="2.0.5-preview" />
           <InfoLine label="研究方案" value={STUDY_PROTOCOL_VERSION} />
           <Text style={styles.helperText}>AI 用于辅助预筛。正式入组仍需要授权人员人工核实。</Text>
         </SettingsDisclosure>

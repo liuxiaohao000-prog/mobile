@@ -1,5 +1,6 @@
 package com.local.patientfollowup
 
+import android.app.ActivityManager
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -8,6 +9,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.net.Uri
+import android.provider.Settings
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -41,6 +43,7 @@ private const val KEY_LAST_RESTART_REASON = "last_restart_reason"
 private const val KEY_START_COUNT = "start_count"
 private const val KEY_LAST_TASK_REMOVED_AT = "last_task_removed_at"
 private const val KEY_LAST_RESTORE_ATTEMPT_AT = "last_restore_attempt_at"
+internal const val MONITOR_STOPPED_ACTION = "com.local.patientfollowup.MONITOR_STOPPED"
 
 class FollowupMonitorPackage : ReactPackage {
   override fun createNativeModules(reactContext: ReactApplicationContext): List<NativeModule> =
@@ -59,9 +62,22 @@ class FollowupMonitorModule(
   fun getMonitorStatus(promise: Promise) {
     try {
       val prefs = context.getSharedPreferences(MONITOR_PREFS, Context.MODE_PRIVATE)
+      val serviceRunning = try {
+        // Android O+ still exposes this package's OWN running services,
+        // including a service hosted in the lightweight guard process.
+        val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        @Suppress("DEPRECATION")
+        activityManager.getRunningServices(Int.MAX_VALUE).any {
+          it.service.className == FollowupMonitorService::class.java.name &&
+          it.service.packageName == context.packageName
+        }
+      } catch (error: Throwable) {
+        Log.w("FollowupMonitor", "Could not query guard service process", error)
+        false
+      }
       val result = Arguments.createMap().apply {
         putBoolean("enabled", prefs.getBoolean(KEY_ENABLED, false))
-        putBoolean("running", FollowupMonitorService.running)
+        putBoolean("running", serviceRunning)
         putString("lastError", prefs.getString(KEY_LAST_ERROR, "") ?: "")
         putDouble("lastStartedAt", prefs.getLong(KEY_LAST_STARTED_AT, 0L).toDouble())
         putDouble("lastStoppedAt", prefs.getLong(KEY_LAST_STOPPED_AT, 0L).toDouble())
@@ -80,7 +96,10 @@ class FollowupMonitorModule(
   fun setMonitorEnabled(enabled: Boolean, promise: Promise) {
     try {
       val prefs = context.getSharedPreferences(MONITOR_PREFS, Context.MODE_PRIVATE)
-      if (enabled && !NotificationManagerCompat.from(context).areNotificationsEnabled()) {
+      // Android 13+ can keep the FGS running while hiding its notification
+      // from the notification drawer. This does NOT enable reminder banners.
+      if (enabled && Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU &&
+        !NotificationManagerCompat.from(context).areNotificationsEnabled()) {
         throw IllegalStateException("请先允许研伴发送系统通知，才能开启常驻监测。")
       }
       prefs.edit().putBoolean(KEY_ENABLED, enabled).remove(KEY_LAST_ERROR).commit()
@@ -108,6 +127,21 @@ class FollowupMonitorModule(
   }
 
   @ReactMethod
+  fun openMonitorNotificationSettings(promise: Promise) {
+    try {
+      val intent = Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS).apply {
+        putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+        putExtra(Settings.EXTRA_CHANNEL_ID, "followup-background-monitor-v1")
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      }
+      context.startActivity(intent)
+      promise.resolve(true)
+    } catch (error: Throwable) {
+      promise.reject("MONITOR_CHANNEL_SETTINGS_FAILED", error.message ?: "无法打开监测通知设置", error)
+    }
+  }
+
+  @ReactMethod
   fun updateMonitorSnapshot(pendingJson: String, completedJson: String, totalPatients: Int, promise: Promise) {
     try {
       // Validate the aggregated anonymous date histogram before persisting it.
@@ -121,9 +155,18 @@ class FollowupMonitorModule(
       if (changed) {
         prefs.edit().putString(KEY_PENDING_DATES, pendingJson)
           .putString(KEY_COMPLETED_DATES, completedJson)
-          .putInt(KEY_TOTAL_PATIENTS, normalizedTotal).apply()
-        // Only redraw on changes, never on periodic heartbeat.
-        FollowupMonitorService.refreshVisibleNotification(context)
+          .putInt(KEY_TOTAL_PATIENTS, normalizedTotal).commit()
+        // The guard runs in another process: deliver the snapshot explicitly.
+        // Avoid relying on cross-process SharedPreferences cache invalidation.
+        if (prefs.getBoolean(KEY_ENABLED, false)) {
+          ContextCompat.startForegroundService(context,
+            Intent(context, FollowupMonitorService::class.java)
+              .setAction(FollowupMonitorService.ACTION_UPDATE)
+              .putExtra(FollowupMonitorService.EXTRA_PENDING_JSON, pendingJson)
+              .putExtra(FollowupMonitorService.EXTRA_COMPLETED_JSON, completedJson)
+              .putExtra(FollowupMonitorService.EXTRA_TOTAL, normalizedTotal),
+          )
+        }
       }
       promise.resolve(true)
     } catch (error: Throwable) {
@@ -135,8 +178,16 @@ class FollowupMonitorModule(
   fun restoreMonitorIfEnabled(promise: Promise) {
     try {
       val prefs = context.getSharedPreferences(MONITOR_PREFS, Context.MODE_PRIVATE)
-      if (prefs.getBoolean(KEY_ENABLED, false) && !FollowupMonitorService.running &&
-        NotificationManagerCompat.from(context).areNotificationsEnabled()) {
+      val alreadyRunning = try {
+        val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        @Suppress("DEPRECATION")
+        activityManager.getRunningServices(Int.MAX_VALUE).any {
+          it.service.className == FollowupMonitorService::class.java.name
+        }
+      } catch (_: Throwable) { false }
+      if (prefs.getBoolean(KEY_ENABLED, false) && !alreadyRunning &&
+        (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU ||
+          NotificationManagerCompat.from(context).areNotificationsEnabled())) {
         ContextCompat.startForegroundService(
           context,
           Intent(context, FollowupMonitorService::class.java).setAction(FollowupMonitorService.ACTION_START),
@@ -162,6 +213,10 @@ class FollowupMonitorService : Service() {
   companion object {
     const val ACTION_START = "com.local.patientfollowup.MONITOR_START"
     const val ACTION_STOP = "com.local.patientfollowup.MONITOR_STOP"
+    const val ACTION_UPDATE = "com.local.patientfollowup.MONITOR_UPDATE"
+    const val EXTRA_PENDING_JSON = "pendingJson"
+    const val EXTRA_COMPLETED_JSON = "completedJson"
+    const val EXTRA_TOTAL = "totalPatients"
     const val NOTIFICATION_ID = 27160
     private const val CHANNEL_ID = "followup-background-monitor-v1"
     private const val STOP_REQUEST_CODE = 27161
@@ -177,7 +232,8 @@ class FollowupMonitorService : Service() {
     fun restoreAfterSystemEvent(context: Context, action: String) {
       val prefs = context.getSharedPreferences(MONITOR_PREFS, Context.MODE_PRIVATE)
       if (!prefs.getBoolean(KEY_ENABLED, false) ||
-        !NotificationManagerCompat.from(context).areNotificationsEnabled()) return
+        (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU &&
+          !NotificationManagerCompat.from(context).areNotificationsEnabled())) return
       prefs.edit().putLong(KEY_LAST_RESTORE_ATTEMPT_AT, System.currentTimeMillis())
         .putString(KEY_LAST_RESTART_REASON, "系统事件：$action").apply()
       try {
@@ -275,9 +331,28 @@ class FollowupMonitorService : Service() {
     val prefs = getSharedPreferences(MONITOR_PREFS, Context.MODE_PRIVATE)
     if (intent?.action == ACTION_STOP) {
       prefs.edit().putBoolean(KEY_ENABLED, false)
-        .putString(KEY_LAST_RESTART_REASON, "用户从通知栏停止").apply()
+        .putString(KEY_LAST_RESTART_REASON, "用户从通知栏停止").commit()
+      // Notify the UI process so the user choice is persisted there too.
+      sendBroadcast(Intent(this, FollowupMonitorStoppedReceiver::class.java)
+        .setAction(MONITOR_STOPPED_ACTION))
       stopSelf()
       return START_NOT_STICKY
+    }
+    if (intent?.action == ACTION_UPDATE) {
+      val pendingJson = intent.getStringExtra(EXTRA_PENDING_JSON)
+      val completedJson = intent.getStringExtra(EXTRA_COMPLETED_JSON)
+      if (pendingJson != null && completedJson != null) {
+        try {
+          JSONObject(pendingJson)
+          JSONObject(completedJson)
+          prefs.edit().putString(KEY_PENDING_DATES, pendingJson)
+            .putString(KEY_COMPLETED_DATES, completedJson)
+            .putInt(KEY_TOTAL_PATIENTS, intent.getIntExtra(EXTRA_TOTAL, 0).coerceAtLeast(0))
+            .commit()
+        } catch (error: Throwable) {
+          Log.w("FollowupMonitor", "Malformed snapshot ignored", error)
+        }
+      }
     }
     if (!prefs.getBoolean(KEY_ENABLED, false)) {
       stopSelf()
@@ -355,5 +430,15 @@ class FollowupMonitorService : Service() {
     getSharedPreferences(MONITOR_PREFS, Context.MODE_PRIVATE).edit()
       .putLong(KEY_LAST_STOPPED_AT, System.currentTimeMillis()).apply()
     super.onDestroy()
+  }
+}
+
+// Explicit cross-process state acknowledgement when user stops via notification.
+class FollowupMonitorStoppedReceiver : android.content.BroadcastReceiver() {
+  override fun onReceive(context: Context, intent: Intent?) {
+    if (intent?.action != MONITOR_STOPPED_ACTION) return
+    context.getSharedPreferences(MONITOR_PREFS, Context.MODE_PRIVATE).edit()
+      .putBoolean(KEY_ENABLED, false)
+      .putString(KEY_LAST_RESTART_REASON, "用户从通知栏停止").commit()
   }
 }

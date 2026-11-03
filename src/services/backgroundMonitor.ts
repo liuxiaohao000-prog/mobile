@@ -23,6 +23,7 @@ const monitor = NativeModules.FollowupMonitor as
       setMonitorEnabled(enabled: boolean): Promise<boolean>;
       updateMonitorSnapshot(pendingJson: string, completedJson: string, totalPatients: number): Promise<boolean>;
       restoreMonitorIfEnabled(): Promise<boolean>;
+      openMonitorNotificationSettings(): Promise<boolean>;
     }
   | undefined;
 
@@ -97,4 +98,9 @@ export async function restoreBackgroundMonitorIfEnabled(): Promise<void> {
     await syncBackgroundMonitorSnapshot();
     await monitor.restoreMonitorIfEnabled();
   }
+}
+
+export async function openMonitorNotificationSettings(): Promise<void> {
+  if (!available || !monitor) throw new Error('当前设备不支持原生监测通知设置。');
+  await monitor.openMonitorNotificationSettings();
 }

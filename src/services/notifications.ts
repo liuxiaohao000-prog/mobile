@@ -18,6 +18,7 @@ export type ReminderDiagnostics = {
   channelImportance: number;
   testNotificationPostedAt: number;
   testReceiverReceivedAt: number;
+  testServiceEnteredAt: number;
   batteryOptimizationExempt: boolean;
   testVibrationStartedAt: number;
   testError: string;

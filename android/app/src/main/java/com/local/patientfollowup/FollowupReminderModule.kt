@@ -45,6 +45,7 @@ internal const val KEY_TEST_NOTIFIED_AT = "test_notified_at"
 internal const val KEY_TEST_VIBRATION_AT = "test_vibration_at"
 internal const val KEY_TEST_ERROR = "test_error"
 internal const val KEY_TEST_RECEIVED_AT = "test_receiver_received_at"
+internal const val KEY_TEST_SERVICE_ENTERED_AT = "test_service_entered_at"
 internal const val ACTION_FOLLOWUP_ALARM = "com.local.patientfollowup.FOLLOWUP_ALARM"
 internal const val ACTION_TEST_ALARM = "com.local.patientfollowup.TEST_ALARM"
 internal const val FOLLOWUP_CHANNEL_ID = "followup-reminders-v4"
@@ -95,6 +96,7 @@ class FollowupReminderModule(
           (reactContext.getSystemService(Context.ALARM_SERVICE) as AlarmManager).canScheduleExactAlarms())
         putDouble("testNotificationPostedAt", preferences.getLong(KEY_TEST_NOTIFIED_AT, 0L).toDouble())
         putDouble("testReceiverReceivedAt", preferences.getLong(KEY_TEST_RECEIVED_AT, 0L).toDouble())
+        putDouble("testServiceEnteredAt", preferences.getLong(KEY_TEST_SERVICE_ENTERED_AT, 0L).toDouble())
         putDouble("testVibrationStartedAt", preferences.getLong(KEY_TEST_VIBRATION_AT, 0L).toDouble())
         putString("testError", preferences.getString(KEY_TEST_ERROR, "") ?: "")
         putDouble("channelImportance", (channel?.importance ?: 0).toDouble())
@@ -308,7 +310,9 @@ internal object LocalFollowupAlarm {
           PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
       }
-      alarmManager.setAlarmClock(AlarmManager.AlarmClockInfo(triggerAtMillis, showIntent), receiverOperation)
+      // Direct alarm-to-service delivery avoids a broadcast -> FGS hand-off
+      // and gets the system exact-alarm foreground-start allowance directly.
+      alarmManager.setAlarmClock(AlarmManager.AlarmClockInfo(triggerAtMillis, showIntent), foregroundOperation)
     } else {
       AlarmManagerCompat.setAndAllowWhileIdle(alarmManager, AlarmManager.RTC_WAKEUP, triggerAtMillis, receiverOperation)
     }
@@ -353,8 +357,8 @@ internal object LocalFollowupAlarm {
   fun scheduleTestReminder(context: Context): Boolean {
     ensureNotificationChannel(context)
     val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-    val operation = testAlarmPendingIntent(context, false)
-    val legacyOperation = testAlarmPendingIntent(context, true)
+    val operation = testAlarmPendingIntent(context, true)
+    val legacyOperation = testAlarmPendingIntent(context, false)
     alarmManager.cancel(operation)
     alarmManager.cancel(legacyOperation)
     val exactAlarmAllowed = Build.VERSION.SDK_INT < Build.VERSION_CODES.S || alarmManager.canScheduleExactAlarms()
@@ -377,6 +381,7 @@ internal object LocalFollowupAlarm {
       .putLong(KEY_TEST_SCHEDULED_AT, triggerAtMillis)
       .remove(KEY_TEST_TRIGGERED_AT)
       .remove(KEY_TEST_RECEIVED_AT)
+      .remove(KEY_TEST_SERVICE_ENTERED_AT)
       .remove(KEY_TEST_NOTIFIED_AT)
       .remove(KEY_TEST_VIBRATION_AT)
       .remove(KEY_TEST_ERROR)

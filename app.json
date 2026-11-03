@@ -3,7 +3,7 @@
     "name": "研伴",
     "slug": "patient-followup-local",
     "scheme": "patientfollowup",
-    "version": "2.0.4",
+    "version": "2.0.5",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
@@ -13,7 +13,7 @@
     },
     "android": {
       "package": "com.local.patientfollowup",
-      "versionCode": 20,
+      "versionCode": 21,
       "permissions": [
         "android.permission.POST_NOTIFICATIONS",
         "android.permission.SCHEDULE_EXACT_ALARM"

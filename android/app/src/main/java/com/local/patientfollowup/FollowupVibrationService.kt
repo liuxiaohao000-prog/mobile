@@ -53,6 +53,11 @@ class FollowupVibrationService : Service() {
     }
     val isTestAlarm = intent?.action == ACTION_TEST_ALARM
     val isRealAlarm = intent?.action == ACTION_FOLLOWUP_ALARM
+    if (isTestAlarm) {
+      // First line of service entry: survives later foreground-promotion failure.
+      getSharedPreferences(REMINDER_PREFS, Context.MODE_PRIVATE)
+        .edit().putLong(KEY_TEST_SERVICE_ENTERED_AT, System.currentTimeMillis()).commit()
+    }
     try {
       ensureServiceChannel()
       val stopIntent = Intent(this, FollowupVibrationService::class.java).setAction(ACTION_STOP)
