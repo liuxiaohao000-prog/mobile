@@ -1734,7 +1734,11 @@ function SettingsPage({ onRefresh }: Props) {
   const [reminderDiagnostics, setReminderDiagnostics] = useState<ReminderDiagnostics | null>(null);
   const [reminderDetailsOpen, setReminderDetailsOpen] = useState(false);
   const [testFeedback, setTestFeedback] = useState('');
-  const [monitorState, setMonitorState] = useState<BackgroundMonitorState>({ enabled: false, running: false, lastError: '' });
+  const [monitorState, setMonitorState] = useState<BackgroundMonitorState>({
+    enabled: false, running: false, lastError: '', lastStartedAt: 0,
+    lastStoppedAt: 0, lastStartReason: '', lastTaskRemovedAt: 0,
+    lastRestoreAttemptAt: 0, startCount: 0,
+  });
   const [monitorBusy, setMonitorBusy] = useState(false);
   const [backupDetailsOpen, setBackupDetailsOpen] = useState(false);
   const [aiDetailsOpen, setAiDetailsOpen] = useState(false);
@@ -1753,7 +1757,7 @@ function SettingsPage({ onRefresh }: Props) {
       await setBackgroundMonitorEnabled(enabled);
       await refreshMonitorStatus();
       if (enabled) {
-        Alert.alert('后台随访监测已开启', '原生常驻通知显示三项汇总数字。点击通知可返回工作台，也可在通知中停止监测。系统仍有权在强行停止或资源不足时终止服务。');
+        Alert.alert('后台监测已开启', '通知栏已提供紧凑摘要及可展开的三项随访统计。轻点进入工作台，也可以在通知中结束监测。已启用系统支持的服务恢复机制，但无法保证强行停止后继续运行。');
       }
     } catch (error) {
       Alert.alert('无法切换后台监测', error instanceof Error ? error.message : '请检查通知权限并重试。');
@@ -1977,7 +1981,7 @@ function SettingsPage({ onRefresh }: Props) {
                   <Text style={styles.cardHeading}>后台随访监测</Text>
                   <Text style={styles.settingsSubtitle}>
                     {monitorState.enabled
-                      ? monitorState.running ? '运行中 · 通知栏显示今日随访数据' : '已启用 · 正在等待系统启动服务'
+                      ? monitorState.running ? '运行中 · 已启用低功耗守护' : '已开启 · 服务未运行，请查看诊断状态'
                       : '未开启 · 可自主选择常驻通知'}
                   </Text>
                 </View>
@@ -1989,13 +1993,24 @@ function SettingsPage({ onRefresh }: Props) {
                 />
               </View>
               <Text style={styles.helperText}>
-                开启后持续显示：今日待随访（含逾期）、今日已完成、入组总人数。数据本地汇总、不联网、不定时轮询；可随时关闭。
+                折叠时简洁显示，展开可查看今日待随访、今日完成和总入组三项数据。后台不轮询、不联网；重启或升级后尝试恢复，随时可关闭。
               </Text>
               {!notificationGranted ? (
                 <Text style={styles.helperText}>需要先在上方允许研伴发送通知。</Text>
               ) : null}
               {monitorState.lastError ? (
                 <Text style={[styles.helperText, { color: theme.danger }]}>运行异常：{monitorState.lastError}</Text>
+              ) : null}
+              {monitorState.enabled && monitorState.lastStartedAt > 0 ? (
+                <Text style={styles.helperText}>
+                  上次启动：{new Date(monitorState.lastStartedAt).toLocaleString('zh-CN', { hour12: false })}
+                  {' · '}启动记录 {monitorState.startCount} 次
+                </Text>
+              ) : null}
+              {monitorState.enabled && !monitorState.running ? (
+                <Text style={[styles.helperText, { color: theme.danger }]}>
+                  服务当前未运行；系统可能已终止后台服务。请重新进入 App 检查后台通知。
+                </Text>
               ) : null}
             </View>
           ) : null}
@@ -2047,6 +2062,17 @@ function SettingsPage({ onRefresh }: Props) {
                   )}
                   {reminderDiagnostics.testTriggeredAt > 0 && reminderDiagnostics.testReceiverReceivedAt === 0 ? (
                     <Text style={styles.helperText}>检测到旧版前台服务触发记录，但没有广播入口记录。</Text>
+                  ) : null}
+                </>
+              ) : null}
+              {Platform.OS === 'android' && monitorState.enabled ? (
+                <>
+                  <Text style={styles.helperText}>后台服务：{monitorState.running ? '运行中' : '未运行'} · {monitorState.lastStartReason || '未记录启动原因'}</Text>
+                  {monitorState.lastTaskRemovedAt > 0 ? (
+                    <Text style={styles.helperText}>最近任务划出记录：{new Date(monitorState.lastTaskRemovedAt).toLocaleString('zh-CN', { hour12: false })}</Text>
+                  ) : null}
+                  {monitorState.lastRestoreAttemptAt > 0 ? (
+                    <Text style={styles.helperText}>系统事件恢复尝试：{new Date(monitorState.lastRestoreAttemptAt).toLocaleString('zh-CN', { hour12: false })}</Text>
                   ) : null}
                 </>
               ) : null}
@@ -2119,7 +2145,7 @@ function SettingsPage({ onRefresh }: Props) {
           expanded={aboutDetailsOpen}
           onToggle={() => setAboutDetailsOpen((value) => !value)}
         >
-          <InfoLine label="应用版本" value="2.0.3-preview" />
+          <InfoLine label="应用版本" value="2.0.4-preview" />
           <InfoLine label="研究方案" value={STUDY_PROTOCOL_VERSION} />
           <Text style={styles.helperText}>AI 用于辅助预筛。正式入组仍需要授权人员人工核实。</Text>
         </SettingsDisclosure>
@@ -2272,6 +2298,9 @@ export default function App() {
       if (initializationComplete.current) {
         setReady(true);
         await refresh();
+        // Repair an opted-in monitor after a foreground return if Android/OEM
+        // evicted the native service while the React activity stayed alive.
+        await restoreBackgroundMonitorIfEnabled().catch(() => undefined);
       } else {
         await initializeAfterBackupAccess();
       }

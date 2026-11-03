@@ -9,6 +9,12 @@ export type BackgroundMonitorState = {
   enabled: boolean;
   running: boolean;
   lastError: string;
+  lastStartedAt: number;
+  lastStoppedAt: number;
+  lastStartReason: string;
+  lastTaskRemovedAt: number;
+  lastRestoreAttemptAt: number;
+  startCount: number;
 };
 
 const monitor = NativeModules.FollowupMonitor as
@@ -23,7 +29,17 @@ const monitor = NativeModules.FollowupMonitor as
 const available = Platform.OS === 'android' && Boolean(monitor);
 
 export async function getBackgroundMonitorState(): Promise<BackgroundMonitorState> {
-  if (!available || !monitor) return { enabled: false, running: false, lastError: '' };
+  if (!available || !monitor) return {
+    enabled: false,
+    running: false,
+    lastError: '',
+    lastStartedAt: 0,
+    lastStoppedAt: 0,
+    lastStartReason: '',
+    lastTaskRemovedAt: 0,
+    lastRestoreAttemptAt: 0,
+    startCount: 0,
+  };
   return monitor.getMonitorStatus();
 }
 

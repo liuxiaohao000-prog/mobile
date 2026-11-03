@@ -201,7 +201,20 @@ class FollowupReminderReceiver : BroadcastReceiver() {
         // Reboot, timezone changes and package updates must only re-arm the
         // next alarm. They must not create a surprise notification at 2 AM.
         else -> {
-          LocalFollowupAlarm.scheduleFromSavedState(context)
+          // Independently restore both features after a boot or app upgrade.
+          // A failed daily-alarm schedule must not prevent an opted-in monitor
+          // service from recovering, and vice versa.
+          try {
+            LocalFollowupAlarm.scheduleFromSavedState(context)
+          } catch (error: Throwable) {
+            Log.e("FollowupReminder", "Could not restore daily alarm after $action", error)
+          }
+          if (action == Intent.ACTION_BOOT_COMPLETED ||
+              action == Intent.ACTION_MY_PACKAGE_REPLACED) {
+            FollowupMonitorService.restoreAfterSystemEvent(context, action ?: "unknown")
+          } else {
+            FollowupMonitorService.refreshVisibleNotification(context)
+          }
           finish()
         }
       }

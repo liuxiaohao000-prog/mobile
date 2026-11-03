@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <color name="yanban_monitor_primary">#173A38</color>
+  <color name="yanban_monitor_secondary">#68807C</color>
+  <color name="yanban_monitor_accent">#177D68</color>
+  <color name="yanban_monitor_badge_background">#E5F5EF</color>
+  <color name="yanban_monitor_metric_background">#F1F7F4</color>
+</resources>

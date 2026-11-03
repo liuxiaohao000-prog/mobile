@@ -13,6 +13,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.util.Log
+import android.widget.RemoteViews
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
@@ -34,6 +35,12 @@ private const val KEY_PENDING_DATES = "pending_dates_json"
 private const val KEY_COMPLETED_DATES = "completed_dates_json"
 private const val KEY_TOTAL_PATIENTS = "total_enrolled"
 private const val KEY_LAST_ERROR = "last_error"
+private const val KEY_LAST_STARTED_AT = "last_started_at"
+private const val KEY_LAST_STOPPED_AT = "last_stopped_at"
+private const val KEY_LAST_RESTART_REASON = "last_restart_reason"
+private const val KEY_START_COUNT = "start_count"
+private const val KEY_LAST_TASK_REMOVED_AT = "last_task_removed_at"
+private const val KEY_LAST_RESTORE_ATTEMPT_AT = "last_restore_attempt_at"
 
 class FollowupMonitorPackage : ReactPackage {
   override fun createNativeModules(reactContext: ReactApplicationContext): List<NativeModule> =
@@ -56,6 +63,12 @@ class FollowupMonitorModule(
         putBoolean("enabled", prefs.getBoolean(KEY_ENABLED, false))
         putBoolean("running", FollowupMonitorService.running)
         putString("lastError", prefs.getString(KEY_LAST_ERROR, "") ?: "")
+        putDouble("lastStartedAt", prefs.getLong(KEY_LAST_STARTED_AT, 0L).toDouble())
+        putDouble("lastStoppedAt", prefs.getLong(KEY_LAST_STOPPED_AT, 0L).toDouble())
+        putString("lastStartReason", prefs.getString(KEY_LAST_RESTART_REASON, "") ?: "")
+        putInt("startCount", prefs.getInt(KEY_START_COUNT, 0))
+        putDouble("lastTaskRemovedAt", prefs.getLong(KEY_LAST_TASK_REMOVED_AT, 0L).toDouble())
+        putDouble("lastRestoreAttemptAt", prefs.getLong(KEY_LAST_RESTORE_ATTEMPT_AT, 0L).toDouble())
       }
       promise.resolve(result)
     } catch (e: Throwable) {
@@ -83,6 +96,7 @@ class FollowupMonitorModule(
           throw error
         }
       } else {
+        prefs.edit().putString(KEY_LAST_RESTART_REASON, "用户关闭后台监测").apply()
         context.stopService(Intent(context, FollowupMonitorService::class.java))
         (context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
           .cancel(FollowupMonitorService.NOTIFICATION_ID)
@@ -99,12 +113,18 @@ class FollowupMonitorModule(
       // Validate the aggregated anonymous date histogram before persisting it.
       JSONObject(pendingJson)
       JSONObject(completedJson)
-      context.getSharedPreferences(MONITOR_PREFS, Context.MODE_PRIVATE)
-        .edit().putString(KEY_PENDING_DATES, pendingJson)
-        .putString(KEY_COMPLETED_DATES, completedJson)
-        .putInt(KEY_TOTAL_PATIENTS, totalPatients.coerceAtLeast(0)).apply()
-      // Never start a background FGS while only updating statistics.
-      FollowupMonitorService.refreshVisibleNotification(context)
+      val prefs = context.getSharedPreferences(MONITOR_PREFS, Context.MODE_PRIVATE)
+      val normalizedTotal = totalPatients.coerceAtLeast(0)
+      val changed = prefs.getString(KEY_PENDING_DATES, null) != pendingJson ||
+        prefs.getString(KEY_COMPLETED_DATES, null) != completedJson ||
+        prefs.getInt(KEY_TOTAL_PATIENTS, -1) != normalizedTotal
+      if (changed) {
+        prefs.edit().putString(KEY_PENDING_DATES, pendingJson)
+          .putString(KEY_COMPLETED_DATES, completedJson)
+          .putInt(KEY_TOTAL_PATIENTS, normalizedTotal).apply()
+        // Only redraw on changes, never on periodic heartbeat.
+        FollowupMonitorService.refreshVisibleNotification(context)
+      }
       promise.resolve(true)
     } catch (error: Throwable) {
       promise.reject("MONITOR_SNAPSHOT_FAILED", error.message ?: "更新后台统计失败", error)
@@ -149,6 +169,29 @@ class FollowupMonitorService : Service() {
     @Volatile var running: Boolean = false
       private set
 
+    /**
+     * Restore only after a system-supported lifecycle event (boot or package
+     * upgrade), and only for users who previously enabled this visible service.
+     * No periodic alarms, timers or hidden resurrection after Force Stop.
+     */
+    fun restoreAfterSystemEvent(context: Context, action: String) {
+      val prefs = context.getSharedPreferences(MONITOR_PREFS, Context.MODE_PRIVATE)
+      if (!prefs.getBoolean(KEY_ENABLED, false) ||
+        !NotificationManagerCompat.from(context).areNotificationsEnabled()) return
+      prefs.edit().putLong(KEY_LAST_RESTORE_ATTEMPT_AT, System.currentTimeMillis())
+        .putString(KEY_LAST_RESTART_REASON, "系统事件：$action").apply()
+      try {
+        ContextCompat.startForegroundService(
+          context,
+          Intent(context, FollowupMonitorService::class.java).setAction(ACTION_START),
+        )
+      } catch (error: Throwable) {
+        Log.w("FollowupMonitor", "System-event foreground restart denied", error)
+        prefs.edit().putString(KEY_LAST_ERROR,
+          "系统事件恢复失败：" + (error.message ?: error.javaClass.simpleName)).apply()
+      }
+    }
+
     fun refreshVisibleNotification(context: Context) {
       if (!running) return
       try {
@@ -191,22 +234,31 @@ class FollowupMonitorService : Service() {
         Intent(context, FollowupMonitorService::class.java).setAction(ACTION_STOP),
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
 
-      val line = "今日待随访 ${pending}  ·  今日已完成 ${completed}  ·  入组总人数 ${enrolled}"
+      val compact = RemoteViews(context.packageName, R.layout.yanban_monitor_compact).apply {
+        setTextViewText(R.id.yanban_monitor_compact_counts,
+          "待随访 $pending   ·   已完成 $completed   ·   总入组 $enrolled")
+      }
+      val expanded = RemoteViews(context.packageName, R.layout.yanban_monitor_expanded).apply {
+        setTextViewText(R.id.yanban_monitor_due, pending.toString())
+        setTextViewText(R.id.yanban_monitor_completed, completed.toString())
+        setTextViewText(R.id.yanban_monitor_enrolled, enrolled.toString())
+      }
       return NotificationCompat.Builder(context, CHANNEL_ID)
-        .setSmallIcon(android.R.drawable.ic_menu_my_calendar)
-        .setContentTitle("研伴 · 正在监测今日随访")
-        .setContentText(line)
-        .setStyle(NotificationCompat.BigTextStyle().bigText(
-          "今日待随访（含逾期） ${pending}     今日已完成 ${completed}\n入组总人数 ${enrolled}\n点击进入研伴工作台"
-        ))
+        .setSmallIcon(R.drawable.ic_yanban_monitor_notification)
+        .setContentTitle("研伴 · 随访监测中")
+        .setContentText("待随访 $pending · 今日完成 $completed · 总入组 $enrolled")
+        .setStyle(NotificationCompat.DecoratedCustomViewStyle())
+        .setCustomContentView(compact)
+        .setCustomBigContentView(expanded)
         .setContentIntent(open)
         .setCategory(NotificationCompat.CATEGORY_SERVICE)
         .setPriority(NotificationCompat.PRIORITY_LOW)
+        .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
         .setOnlyAlertOnce(true)
         .setSilent(true)
         .setOngoing(true)
         .setShowWhen(false)
-        .addAction(android.R.drawable.ic_media_pause, "停止后台监测", stop)
+        .addAction(android.R.drawable.ic_media_pause, "结束监测", stop)
         .build()
     }
   }
@@ -222,7 +274,8 @@ class FollowupMonitorService : Service() {
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
     val prefs = getSharedPreferences(MONITOR_PREFS, Context.MODE_PRIVATE)
     if (intent?.action == ACTION_STOP) {
-      prefs.edit().putBoolean(KEY_ENABLED, false).apply()
+      prefs.edit().putBoolean(KEY_ENABLED, false)
+        .putString(KEY_LAST_RESTART_REASON, "用户从通知栏停止").apply()
       stopSelf()
       return START_NOT_STICKY
     }
@@ -239,7 +292,16 @@ class FollowupMonitorService : Service() {
         startForeground(NOTIFICATION_ID, notification)
       }
       running = true
-      prefs.edit().remove(KEY_LAST_ERROR).apply()
+      val starts = prefs.getInt(KEY_START_COUNT, 0) + 1
+      val reason = when {
+        intent == null -> "系统恢复前台服务"
+        intent.action == ACTION_START && starts > 1 -> "用户启动或系统事件恢复"
+        else -> "用户开启后台监测"
+      }
+      prefs.edit().putLong(KEY_LAST_STARTED_AT, System.currentTimeMillis())
+        .putInt(KEY_START_COUNT, starts)
+        .putString(KEY_LAST_RESTART_REASON, reason)
+        .remove(KEY_LAST_ERROR).apply()
       scheduleNextDayRefresh()
     } catch (error: Throwable) {
       Log.e("FollowupMonitor", "User-enabled FGS could not start", error)
@@ -278,9 +340,20 @@ class FollowupMonitorService : Service() {
     handler.postDelayed(midnightRefresh, (midnight - now).coerceAtLeast(1_000L))
   }
 
+  override fun onTaskRemoved(rootIntent: Intent?) {
+    // stopWithTask=false means task removal must not stop the monitoring service.
+    // Record it for diagnostics; do not spin up a new background service here.
+    getSharedPreferences(MONITOR_PREFS, Context.MODE_PRIVATE).edit()
+      .putLong(KEY_LAST_TASK_REMOVED_AT, System.currentTimeMillis()).apply()
+    Log.i("FollowupMonitor", "Recent-task removal observed; keeping user-enabled FGS")
+    super.onTaskRemoved(rootIntent)
+  }
+
   override fun onDestroy() {
     running = false
     handler.removeCallbacks(midnightRefresh)
+    getSharedPreferences(MONITOR_PREFS, Context.MODE_PRIVATE).edit()
+      .putLong(KEY_LAST_STOPPED_AT, System.currentTimeMillis()).apply()
     super.onDestroy()
   }
 }
