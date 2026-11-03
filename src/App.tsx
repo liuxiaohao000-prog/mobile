@@ -1668,6 +1668,38 @@ function FollowupRecordPage({
   );
 }
 
+function SettingsDisclosure({
+  title, subtitle, expanded, onToggle, children,
+}: {
+  title: string;
+  subtitle: string;
+  expanded: boolean;
+  onToggle: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <Card>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ expanded }}
+        onPress={onToggle}
+        style={styles.settingsDisclosureRow}
+      >
+        <View style={{ flex: 1 }}>
+          <Text style={styles.cardHeading}>{title}</Text>
+          <Text style={styles.settingsSubtitle}>{subtitle}</Text>
+        </View>
+        <SymbolView
+          name={{ ios: expanded ? 'chevron.up' : 'chevron.down', android: expanded ? 'expand_less' : 'expand_more', web: expanded ? 'expand_less' : 'expand_more' }}
+          size={21}
+          tintColor={theme.muted}
+        />
+      </Pressable>
+      {expanded ? <View style={styles.settingsDisclosureBody}>{children}</View> : null}
+    </Card>
+  );
+}
+
 function SettingsPage({ onRefresh }: Props) {
   const [settings, setSettings] = useState<AiSettings>({
     apiKey: '',
@@ -1680,6 +1712,10 @@ function SettingsPage({ onRefresh }: Props) {
   const [exactAlarmGranted, setExactAlarmGranted] = useState(false);
   const [reminderDiagnostics, setReminderDiagnostics] = useState<ReminderDiagnostics | null>(null);
   const [reminderDetailsOpen, setReminderDetailsOpen] = useState(false);
+  const [backupDetailsOpen, setBackupDetailsOpen] = useState(false);
+  const [aiDetailsOpen, setAiDetailsOpen] = useState(false);
+  const [operatorDetailsOpen, setOperatorDetailsOpen] = useState(false);
+  const [aboutDetailsOpen, setAboutDetailsOpen] = useState(false);
   const [configuringReminders, setConfiguringReminders] = useState(false);
   const [backupDirectoryName, setBackupDirectoryName] = useState<string | null>(null);
   const [changingBackupDirectory, setChangingBackupDirectory] = useState(false);
@@ -1864,46 +1900,35 @@ function SettingsPage({ onRefresh }: Props) {
   return (
     <KeyboardAvoidingView style={styles.fill} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView contentContainerStyle={styles.pageContent}>
-        <PageHeader title="我的" subtitle="本机资料与 AI 服务设置 · v0.1.14" />
+        <PageHeader title="我的" subtitle="账户、提醒与本机数据" />
         <Card>
-          <Text style={styles.cardHeading}>本机数据恢复目录</Text>
-          <View style={styles.settingStatusRow}>
-            <Text style={styles.bodyText}>当前文件夹</Text>
-            <Text style={styles.patientState} numberOfLines={1}>{backupDirectoryName ?? '未授权'}</Text>
-          </View>
-          <Text style={styles.helperText}>
-            研伴只读写你选定的文件夹及其中的备份。重装后重新选择同一文件夹即可恢复；更换文件夹时会尝试复制现有自动备份。
-          </Text>
-          <View style={{ height: 10 }} />
-          <PrimaryButton
-            title={changingBackupDirectory ? '正在打开文件夹选择器…' : '更改备份文件夹'}
-            onPress={changeBackupDirectory}
-            secondary
-            disabled={changingBackupDirectory}
-          />
-        </Card>
-        <Card>
-          <Text style={styles.cardHeading}>随访提醒</Text>
-          <View style={styles.reminderReadinessRow}>
+          <View style={styles.taskTop}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.cardHeading}>随访提醒</Text>
+              <Text style={styles.settingsSubtitle}>系统通知与定时提醒</Text>
+            </View>
             <View style={[styles.reminderStatusDot, { backgroundColor: reminderReady ? theme.success : theme.accent }]} />
-            <Text style={styles.reminderReadinessText}>{reminderReady ? '主要提醒设置已满足' : '需要检查提醒设置'}</Text>
           </View>
-          <Text style={styles.helperText}>从一个入口检查通知、精确提醒、震动渠道和后台限制；需要系统授权时会引导你完成。</Text>
-          <View style={{ height: 12 }} />
+          <Text style={[styles.reminderReadinessText, { marginTop: 12 }]}>
+            {reminderReady ? '提醒基础设置正常' : '有待完成的系统设置'}
+          </Text>
+          <Text style={styles.helperText}>
+            每日按计划提醒待办；若设备存在后台限制，会引导你完成必要设置。
+          </Text>
+          <View style={{ height: 14 }} />
           <PrimaryButton
-            title={configuringReminders ? '正在检查提醒设置…' : reminderReady ? '检查提醒设置' : '配置随访提醒'}
+            title={configuringReminders ? '正在检查…' : reminderReady ? '检查提醒状态' : '开启随访提醒'}
             onPress={() => void configureReminders()}
             disabled={configuringReminders}
             loading={configuringReminders}
           />
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={reminderDetailsOpen ? '收起提醒状态与测试' : '展开提醒状态与测试'}
             accessibilityState={{ expanded: reminderDetailsOpen }}
-            onPress={() => setReminderDetailsOpen((open) => !open)}
+            onPress={() => setReminderDetailsOpen((value) => !value)}
             style={styles.reminderDisclosure}
           >
-            <Text style={styles.reminderDisclosureText}>状态与测试</Text>
+            <Text style={styles.reminderDisclosureText}>诊断与测试（高级）</Text>
             <SymbolView
               name={{ ios: reminderDetailsOpen ? 'chevron.up' : 'chevron.down', android: reminderDetailsOpen ? 'expand_less' : 'expand_more', web: reminderDetailsOpen ? 'expand_less' : 'expand_more' }}
               size={20}
@@ -1912,56 +1937,90 @@ function SettingsPage({ onRefresh }: Props) {
           </Pressable>
           {reminderDetailsOpen ? (
             <View style={styles.reminderDetails}>
-              <Text style={styles.helperText}>系统通知：{notificationGranted ? '已允许' : '未允许'} · 精确提醒：{exactAlarmGranted ? '已授权' : '未授权'}</Text>
+              <Text style={styles.helperText}>通知：{notificationGranted ? '已授权' : '未授权'} · 准点提醒：{exactAlarmGranted ? '已授权' : '未授权'}</Text>
               {Platform.OS === 'android' ? (
                 <>
                   <Text style={styles.helperText}>
-                    通知级别：{reminderDiagnostics ? reminderDiagnostics.highImportance ? '高' : '需调整' : '未读取'} · 震动：{reminderDiagnostics ? reminderDiagnostics.vibrationEnabled ? '已开启' : '未开启' : '未读取'}
+                    通知级别：{reminderDiagnostics ? reminderDiagnostics.highImportance ? '高' : '需调整' : '未读取'}
+                    {' · '}震动：{reminderDiagnostics ? reminderDiagnostics.vibrationEnabled ? '已开启' : '未开启' : '未读取'}
                   </Text>
-                  <Text style={styles.helperText}>系统后台限制：{reminderDiagnostics ? reminderDiagnostics.backgroundRestricted ? '受限' : '未报告受限' : '未读取'}</Text>
-                  <Text style={styles.helperText}>一加等部分机型另有自启动/关联启动开关，系统不提供统一的读取或自动开启方式。</Text>
+                  <Text style={styles.helperText}>后台限制：{reminderDiagnostics ? reminderDiagnostics.backgroundRestricted ? '系统已限制' : '未报告限制' : '未知'}</Text>
                 </>
               ) : null}
               {reminderDiagnostics && reminderDiagnostics.testScheduledAt > 0 ? (
                 <Text style={styles.helperText}>
                   上次延迟测试：{reminderDiagnostics.testTriggeredAt > 0
-                    ? `已于 ${formatLocalDateTime(new Date(reminderDiagnostics.testTriggeredAt))} 触发`
-                    : `计划于 ${formatLocalDateTime(new Date(reminderDiagnostics.testScheduledAt))} 触发`}
+                    ? '已触发'
+                    : '等待系统触发'}
                 </Text>
               ) : null}
-              <Text style={styles.reminderTestHint}>可选测试：患者提醒与测试共用通知渠道和系统闹钟模块。</Text>
+              <View style={{ height: 12 }} />
+              <PrimaryButton title="立即测试通知" onPress={() => void testNotification(false)} secondary disabled={!notificationGranted} />
               <View style={{ height: 8 }} />
-              <PrimaryButton title="立即测试提醒" onPress={() => testNotification(false)} secondary disabled={!notificationGranted} />
-              <View style={{ height: 8 }} />
-              <PrimaryButton title="测试约 1 分钟后提醒" onPress={() => testNotification(true)} secondary disabled={!notificationGranted} />
+              <PrimaryButton title="一分钟后熄屏测试" onPress={() => void testNotification(true)} secondary disabled={!notificationGranted} />
               {Platform.OS === 'android' ? (
                 <>
                   <View style={{ height: 8 }} />
-                  <PrimaryButton title="打开应用后台设置" onPress={openBackgroundSettings} secondary />
+                  <PrimaryButton title="系统通知渠道" onPress={() => void openNotificationSettings()} secondary />
+                  <View style={{ height: 8 }} />
+                  <PrimaryButton title="设备后台设置" onPress={() => void openBackgroundSettings()} secondary />
                 </>
               ) : null}
             </View>
           ) : null}
         </Card>
-        <Card>
-          <Text style={styles.cardHeading}>AI 接口</Text>
-          <Text style={styles.helperText}>使用 OpenAI 兼容的多模态接口。心电图和必要临床资料会发送到此服务分析。</Text>
-          <TextField label="API Key" value={settings.apiKey} onChangeText={(v) => change('apiKey', v)} placeholder="粘贴你的 API Key" secureTextEntry autoCapitalize="none" />
+        <SettingsDisclosure
+          title="数据与备份"
+          subtitle={backupDirectoryName ? '已选择备份文件夹' : '本机加密保存 · 尚未开启文件夹备份'}
+          expanded={backupDetailsOpen}
+          onToggle={() => setBackupDetailsOpen((value) => !value)}
+        >
+          <Text style={styles.helperText}>
+            患者资料保存在本机加密数据库。外部备份需要选择文件夹；恢复旧数据请在首次创建资料前选择原备份文件夹。
+          </Text>
+          <Text style={styles.helperText}>备份目录：{backupDirectoryName ?? '未设置'}</Text>
+          <View style={{ height: 12 }} />
+          <PrimaryButton
+            title={changingBackupDirectory ? '正在打开文件夹选择器…' : '选择或更改备份文件夹'}
+            onPress={() => void changeBackupDirectory()}
+            disabled={changingBackupDirectory}
+            secondary
+          />
+        </SettingsDisclosure>
+        <SettingsDisclosure
+          title="AI 服务"
+          subtitle="预筛辅助分析 · 连接配置"
+          expanded={aiDetailsOpen}
+          onToggle={() => setAiDetailsOpen((value) => !value)}
+        >
+          <Text style={styles.helperText}>心电图与必要临床资料将发送到所选 AI 服务。请确认服务符合项目的数据授权要求。</Text>
+          <TextField label="API Key" value={settings.apiKey} onChangeText={(v) => change('apiKey', v)} placeholder="粘贴 API Key" secureTextEntry autoCapitalize="none" />
           <TextField label="API Base URL" value={settings.baseUrl} onChangeText={(v) => change('baseUrl', v)} keyboardType="url" autoCapitalize="none" />
           <TextField label="模型名称" value={settings.model} onChangeText={(v) => change('model', v)} autoCapitalize="none" />
-          <PrimaryButton title={saved ? '已保存' : '保存 AI 设置'} onPress={save} />
-        </Card>
-        <Card>
-          <Text style={styles.cardHeading}>本机操作人</Text>
+          <View style={{ height: 12 }} />
+          <PrimaryButton title={saved ? '已保存' : '保存 AI 服务配置'} onPress={() => void save()} />
+        </SettingsDisclosure>
+        <SettingsDisclosure
+          title="操作人信息"
+          subtitle="本机审计记录的署名"
+          expanded={operatorDetailsOpen}
+          onToggle={() => setOperatorDetailsOpen((value) => !value)}
+        >
           <TextField label="操作人姓名" value={actor} onChangeText={setActor} placeholder="用于本机审计记录" />
-          <PrimaryButton title={saved ? '已保存' : '保存操作人'} onPress={save} secondary />
-        </Card>
-        <Card>
-          <Text style={styles.cardHeading}>研究方案</Text>
-          <InfoLine label="当前方案版本" value={STUDY_PROTOCOL_VERSION} />
-          <Text style={styles.helperText}>AI 资格标准随 App 版本管理。AI 结论为预筛主判，正式入组仍需授权人员核实。</Text>
-        </Card>
-        <Text style={styles.privacyNote}>患者资料保存在本机加密数据库，并会随资料变更自动更新本机恢复点。</Text>
+          <View style={{ height: 12 }} />
+          <PrimaryButton title={saved ? '已保存' : '保存操作人'} onPress={() => void save()} secondary />
+        </SettingsDisclosure>
+        <SettingsDisclosure
+          title="关于研伴"
+          subtitle="应用版本与研究方案"
+          expanded={aboutDetailsOpen}
+          onToggle={() => setAboutDetailsOpen((value) => !value)}
+        >
+          <InfoLine label="应用版本" value="2.0.0-preview" />
+          <InfoLine label="研究方案" value={STUDY_PROTOCOL_VERSION} />
+          <Text style={styles.helperText}>AI 用于辅助预筛。正式入组仍需要授权人员人工核实。</Text>
+        </SettingsDisclosure>
+        <Text style={styles.privacyNote}>数据仅保存在本机，AI 预筛按所配置服务单独发送必要信息。</Text>
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -2374,6 +2433,9 @@ const styles = StyleSheet.create({
   filterText: { color: theme.muted, fontSize: 13, fontWeight: '600' },
   filterTextSelected: { color: '#FFFFFF' },
   settingStatusRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 10 },
+  settingsDisclosureRow: { flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 48 },
+  settingsSubtitle: { color: theme.muted, fontSize: 13, lineHeight: 20, marginTop: 3 },
+  settingsDisclosureBody: { marginTop: 12, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.border, paddingTop: 12 },
   reminderReadinessRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8 },
   reminderStatusDot: { width: 9, height: 9, borderRadius: 5 },
   reminderReadinessText: { color: theme.ink, fontSize: 14, fontWeight: '700' },
