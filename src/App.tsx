@@ -19,6 +19,7 @@ import {
   View,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
+import { File, Paths } from 'expo-file-system';
 import * as Notifications from 'expo-notifications';
 import { SymbolView } from 'expo-symbols';
 import {
@@ -61,6 +62,7 @@ import {
   getAutomaticBackupDirectoryName,
   hasAutomaticBackupAccess,
   requestAutomaticBackupAccess,
+  startAutomaticBackup,
 } from './services/automaticBackup';
 import { analyzeEligibility, AiConfigurationError } from './services/aiClient';
 import {
@@ -1971,16 +1973,16 @@ function LoadingView({ label }: { label: string }) {
   );
 }
 
-function BackupAccessGate({ busy, onRequest }: { busy: boolean; onRequest: () => void }) {
+function BackupAccessGate({ busy, onRequest, onSkip }: { busy: boolean; onRequest: () => void; onSkip: () => void }) {
   return (
     <SafeAreaView style={styles.safe}>
       <StatusBar barStyle="dark-content" />
       <ScrollView contentContainerStyle={styles.pageContent}>
-        <PageHeader title="选择备份文件夹" subtitle="只授权所选目录，不申请全盘文件权限。" />
+        <PageHeader title="数据恢复（可选）" subtitle="如果你正在换机或重新安装，可以先恢复旧数据。首次使用可以跳过。" />
         <Card>
           <Text style={styles.cardHeading}>目录级授权</Text>
           <Text style={styles.bodyText}>
-            请在系统文件夹选择器中选定一个专用备份文件夹。旧版本备份通常位于 Downloads/_.yanban-patient-followup；
+            如果已有研伴旧备份，请先在系统文件夹选择器中选定原备份文件夹。旧版本备份通常位于 Downloads/_.yanban-patient-followup；
             也可以新建一个文件夹。患者数据库和附件会加密后保存，备份仅用于本机恢复，不会上传。
           </Text>
           <Text style={styles.helperText}>
@@ -1988,10 +1990,12 @@ function BackupAccessGate({ busy, onRequest }: { busy: boolean; onRequest: () =>
           </Text>
           <View style={{ height: 12 }} />
           <PrimaryButton
-            title={busy ? '正在打开文件夹选择器…' : '选择备份文件夹'}
+            title={busy ? '正在打开文件夹选择器…' : '选择文件夹并尝试恢复'}
             onPress={onRequest}
             disabled={busy}
           />
+          <View style={{ height: 10 }} />
+          <PrimaryButton title="没有旧备份，直接开始" onPress={onSkip} secondary disabled={busy} />
           <Text style={styles.privacyNote}>
             卸载后 Android 会撤销目录授权。重新安装后，请重新选择同一个文件夹；备份会自动识别，不需要逐个选择文件。
           </Text>
@@ -2025,6 +2029,7 @@ export default function App() {
   const [fatalError, setFatalError] = useState('');
   const [backupAccessGranted, setBackupAccessGranted] = useState<boolean | null>(null);
   const [requestingBackupAccess, setRequestingBackupAccess] = useState(false);
+  const skippedBackupOnboarding = useRef(false);
   const [page, setPage] = useState<Route>({ kind: 'tab' });
   const [tab, setTab] = useState<Tab>('home');
   const [actor, setActor] = useState('本机操作人');
@@ -2087,8 +2092,12 @@ export default function App() {
   const checkBackupAccessAndInitialize = useCallback(async () => {
     try {
       const granted = await hasAutomaticBackupAccess();
-      setBackupAccessGranted(granted);
-      if (!granted) {
+      const existingDatabase = new File(Paths.document, 'SQLite', 'patient-followup.db').exists;
+      // Existing local data must never be locked out for lack of folder access.
+      // On a fresh installation offer an optional restore choice first.
+      const needsRecoveryChoice = !granted && !existingDatabase && !skippedBackupOnboarding.current;
+      setBackupAccessGranted(!needsRecoveryChoice);
+      if (needsRecoveryChoice) {
         setReady(false);
         return;
       }
@@ -2118,6 +2127,12 @@ export default function App() {
       setRequestingBackupAccess(false);
     }
   }, [checkBackupAccessAndInitialize]);
+
+  const skipBackupSetup = useCallback(() => {
+    skippedBackupOnboarding.current = true;
+    setBackupAccessGranted(true);
+    void initializeAfterBackupAccess();
+  }, [initializeAfterBackupAccess]);
 
   useEffect(() => {
     void checkBackupAccessAndInitialize();
@@ -2178,7 +2193,7 @@ export default function App() {
   }
 
   if (!backupAccessGranted) {
-    return <BackupAccessGate busy={requestingBackupAccess} onRequest={enableBackupAccess} />;
+    return <BackupAccessGate busy={requestingBackupAccess} onRequest={enableBackupAccess} onSkip={skipBackupSetup} />;
   }
 
   if (!ready) return <SafeAreaView style={styles.safe}><LoadingView label="正在初始化本地加密空间…" /></SafeAreaView>;
