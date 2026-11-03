@@ -2080,7 +2080,7 @@ function SettingsPage({ onRefresh }: Props) {
                   )}
                 </>
               ) : null}
-              {Platform.OS === 'android' && (reminderDiagnostics?.dailyPlannedAt ?? 0) > 0 ? (
+              {Platform.OS === 'android' && reminderDiagnostics !== null && reminderDiagnostics.dailyPlannedAt > 0 ? (
                 <Text style={styles.helperText}>
                   正式随访闹钟：{new Date(reminderDiagnostics.dailyPlannedAt).toLocaleString('zh-CN', { hour12: false })}
                   {' · '}备用投递：{reminderDiagnostics.dailyFallbackAt > 0 ? '已安排' : '无精确授权'}
