@@ -35,13 +35,13 @@ jobs:
       # setup-android@v3 currently tries the removed SDK package 'tools'.
       - name: Install Android SDK packages
         run: |
-          "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --install "platforms;android-36" "build-tools;36.0.0" "ndk;27.1.12297006"
+          "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --channel=3 --install "platforms;android-37" "build-tools;36.0.0" "ndk;27.1.12297006"
           yes | "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --licenses || true
       - name: Build signed preview APK
         working-directory: android
         run: |
           chmod +x gradlew
-          ./gradlew :app:assembleRelease --no-daemon --stacktrace -Pandroid.compileSdkVersion=36 -Pandroid.targetSdkVersion=36 -Pandroid.buildToolsVersion=36.0.0
+          ./gradlew :app:assembleRelease --no-daemon --stacktrace -Pandroid.compileSdkVersion=37 -Pandroid.targetSdkVersion=36 -Pandroid.buildToolsVersion=36.0.0
       - name: Copy APK
         run: |
           mkdir -p dist
