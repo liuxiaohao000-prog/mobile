@@ -2066,6 +2066,7 @@ function SettingsPage({ onRefresh }: Props) {
               ) : null}
               {reminderDiagnostics && reminderDiagnostics.testScheduledAt > 0 ? (
                 <>
+                  <Text style={styles.helperText}>备援计划：{reminderDiagnostics.testFallbackAt > 0 ? new Date(reminderDiagnostics.testFallbackAt).toLocaleString("zh-CN", { hour12: false }) : "未注册"} · 广播入口：{reminderDiagnostics.testFallbackReceivedAt > 0 ? "已收到" : "尚无记录"}</Text>
                   <Text style={styles.helperText}>计划触发：{new Date(reminderDiagnostics.testScheduledAt).toLocaleString('zh-CN', { hour12: false })}</Text>
                   {reminderDiagnostics.testServiceEnteredAt > 0 || reminderDiagnostics.testReceiverReceivedAt > 0 ? (
                     <Text style={styles.helperText}>
@@ -2078,6 +2079,14 @@ function SettingsPage({ onRefresh }: Props) {
                     <Text style={styles.helperText}>目标组件尚无到达记录：可能是系统取消或推迟了闹钟，不能仅凭此认定震动执行失败。</Text>
                   )}
                 </>
+              ) : null}
+              {Platform.OS === 'android' && (reminderDiagnostics?.dailyPlannedAt ?? 0) > 0 ? (
+                <Text style={styles.helperText}>
+                  正式随访闹钟：{new Date(reminderDiagnostics.dailyPlannedAt).toLocaleString('zh-CN', { hour12: false })}
+                  {' · '}备用投递：{reminderDiagnostics.dailyFallbackAt > 0 ? '已安排' : '无精确授权'}
+                  {' · '}上次通知确认：{reminderDiagnostics.dailyNotifiedAt > 0
+                    ? new Date(reminderDiagnostics.dailyNotifiedAt).toLocaleString('zh-CN', { hour12: false }) : '暂无'}
+                </Text>
               ) : null}
               {Platform.OS === 'android' && monitorState.enabled ? (
                 <>
@@ -2094,7 +2103,7 @@ function SettingsPage({ onRefresh }: Props) {
                 <Text style={[styles.helperText, { color: theme.danger }]}>上次测试错误：{reminderDiagnostics.testError}</Text>
               ) : null}
               {testFeedback ? <Text style={styles.helperText}>{testFeedback}</Text> : null}
-              <Text style={styles.helperText}>当前使用系统精确闹钟直接启动原生提醒服务；划掉最近任务后应仍可投递。请测试亮屏、熄屏及划掉任务；如被系统强行停止，Android 无法保证提醒。</Text>
+              <Text style={styles.helperText}>当前为双通道原生提醒：准点由系统直接唤起提醒服务；若未确认通知，90 秒后由独立系统广播补投一次。成功后自动去重。正常划掉任务应不影响系统闹钟，但系统级强行停止后 Android 无法保证投递。</Text>
               <View style={{ height: 12 }} />
               <PrimaryButton title="立即测试通知（震动 5 秒）" onPress={() => void testNotification(false)} secondary disabled={!notificationGranted} />
               <View style={{ height: 8 }} />
@@ -2159,7 +2168,7 @@ function SettingsPage({ onRefresh }: Props) {
           expanded={aboutDetailsOpen}
           onToggle={() => setAboutDetailsOpen((value) => !value)}
         >
-          <InfoLine label="应用版本" value="2.0.5-preview" />
+          <InfoLine label="应用版本" value="2.0.6-preview" />
           <InfoLine label="研究方案" value={STUDY_PROTOCOL_VERSION} />
           <Text style={styles.helperText}>AI 用于辅助预筛。正式入组仍需要授权人员人工核实。</Text>
         </SettingsDisclosure>
@@ -2311,7 +2320,7 @@ export default function App() {
       }
       if (initializationComplete.current) {
         setReady(true);
-        await refresh();
+        await refresh(true);
         // Repair an opted-in monitor after a foreground return if Android/OEM
         // evicted the native service while the React activity stayed alive.
         await restoreBackgroundMonitorIfEnabled().catch(() => undefined);

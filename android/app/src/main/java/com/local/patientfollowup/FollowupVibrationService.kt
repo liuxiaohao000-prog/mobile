@@ -53,6 +53,17 @@ class FollowupVibrationService : Service() {
     }
     val isTestAlarm = intent?.action == ACTION_TEST_ALARM
     val isRealAlarm = intent?.action == ACTION_FOLLOWUP_ALARM
+    val plannedAt = intent?.getLongExtra(EXTRA_ALARM_PLANNED_AT, 0L) ?: 0L
+    if (plannedAt > 0L && (isTestAlarm || isRealAlarm)) {
+      val prefs = getSharedPreferences(REMINDER_PREFS, Context.MODE_PRIVATE)
+      val expected = prefs.getLong(
+        if (isTestAlarm) "test_scheduled_at" else "daily_planned_at", 0L)
+      if (expected != plannedAt) {
+        Log.w(TAG, "Ignoring stale alarm delivery; expected=$expected received=$plannedAt")
+        stopSelf(startId)
+        return START_NOT_STICKY
+      }
+    }
     if (isTestAlarm) {
       // First line of service entry: survives later foreground-promotion failure.
       getSharedPreferences(REMINDER_PREFS, Context.MODE_PRIVATE)
@@ -96,10 +107,14 @@ class FollowupVibrationService : Service() {
 
       // Post the actual high-importance, persistent reminder here. It remains in
       // the shade after this short-lived foreground service has stopped.
-      if (isTestAlarm) {
-        LocalFollowupAlarm.deliverTestReminder(this, {}, inService = true)
-      } else if (isRealAlarm) {
-        LocalFollowupAlarm.deliverAndContinue(this, {}, inService = true)
+      val shouldVibrateFromAlarm = when {
+        isTestAlarm -> LocalFollowupAlarm.deliverTestReminder(this, {}, inService = true)
+        isRealAlarm -> LocalFollowupAlarm.deliverAndContinue(this, {}, inService = true)
+        else -> true // Direct user-initiated immediate-vibration test.
+      }
+      if (!shouldVibrateFromAlarm) {
+        stopSelf(startId)
+        return START_NOT_STICKY
       }
 
       val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager

@@ -40,6 +40,16 @@ import java.util.concurrent.atomic.AtomicBoolean
 internal const val REMINDER_PREFS = "patient_followup_reminder"
 private const val KEY_EARLIEST_OPEN_DATE = "earliest_open_date"
 private const val KEY_TEST_SCHEDULED_AT = "test_scheduled_at"
+private const val KEY_TEST_FALLBACK_AT = "test_fallback_at"
+private const val KEY_TEST_FALLBACK_RECEIVED_AT = "test_fallback_received_at"
+private const val KEY_DAILY_PLANNED_AT = "daily_planned_at"
+private const val KEY_DAILY_FALLBACK_AT = "daily_fallback_at"
+private const val KEY_DAILY_NOTIFIED_DATE = "daily_notified_date"
+private const val KEY_DAILY_NOTIFIED_AT = "daily_notified_at"
+private const val KEY_DAILY_CATCHUP_AT = "daily_catchup_at"
+private const val KEY_UNRESOLVED_DAY = "daily_unresolved_date"
+private const val FALLBACK_DELAY_MS = 90_000L
+internal const val EXTRA_ALARM_PLANNED_AT = "alarm_planned_at"
 internal const val KEY_TEST_TRIGGERED_AT = "test_triggered_at"
 internal const val KEY_TEST_NOTIFIED_AT = "test_notified_at"
 internal const val KEY_TEST_VIBRATION_AT = "test_vibration_at"
@@ -52,6 +62,8 @@ internal const val FOLLOWUP_CHANNEL_ID = "followup-reminders-v4"
 private const val ALARM_REQUEST_CODE = 27110
 private const val NOTIFICATION_ID = 27111
 private const val TEST_ALARM_REQUEST_CODE = 27112
+private const val DAILY_FALLBACK_REQUEST_CODE = 27131
+private const val TEST_FALLBACK_REQUEST_CODE = 27132
 private const val TEST_NOTIFICATION_ID = 27113
 
 class FollowupReminderPackage : ReactPackage {
@@ -87,6 +99,13 @@ class FollowupReminderModule(
       val activityManager = reactContext.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
       val result = Arguments.createMap().apply {
         putDouble("testScheduledAt", preferences.getLong(KEY_TEST_SCHEDULED_AT, 0L).toDouble())
+        putDouble("testFallbackAt", preferences.getLong(KEY_TEST_FALLBACK_AT, 0L).toDouble())
+        putDouble("testFallbackReceivedAt", preferences.getLong(KEY_TEST_FALLBACK_RECEIVED_AT, 0L).toDouble())
+        putDouble("dailyPlannedAt", preferences.getLong(KEY_DAILY_PLANNED_AT, 0L).toDouble())
+        putDouble("dailyFallbackAt", preferences.getLong(KEY_DAILY_FALLBACK_AT, 0L).toDouble())
+        putDouble("dailyNotifiedAt", preferences.getLong(KEY_DAILY_NOTIFIED_AT, 0L).toDouble())
+        putDouble("dailyCatchupAt", preferences.getLong(KEY_DAILY_CATCHUP_AT, 0L).toDouble())
+        putString("dailyUnresolvedDay", preferences.getString(KEY_UNRESOLVED_DAY, "") ?: "")
         putDouble("testTriggeredAt", preferences.getLong(KEY_TEST_TRIGGERED_AT, 0L).toDouble())
         putBoolean("highImportance", channel != null && channel.importance >= NotificationManager.IMPORTANCE_HIGH)
         putBoolean("vibrationEnabled", channel?.shouldVibrate() ?: false)
@@ -182,23 +201,34 @@ class FollowupReminderReceiver : BroadcastReceiver() {
     try {
       when (action) {
         ACTION_TEST_ALARM -> {
-          // A short broadcast is the primary OS alarm target: post the notification
-          // BEFORE doing any optional haptic work, avoiding all-or-nothing FGS delivery.
-          val scheduled = context.getSharedPreferences(REMINDER_PREFS, Context.MODE_PRIVATE)
-            .getLong(KEY_TEST_SCHEDULED_AT, 0L)
-          val received = System.currentTimeMillis()
-          context.getSharedPreferences(REMINDER_PREFS, Context.MODE_PRIVATE).edit()
-            .putLong(KEY_TEST_RECEIVED_AT, received).commit()
-          Log.i("FollowupReminder", "Test alarm receiver entered; latenessMs=" +
-            (if (scheduled > 0L) (received - scheduled) else -1L))
-          val shouldVibrate = LocalFollowupAlarm.deliverTestReminder(context, {}, inService = true)
-          if (shouldVibrate) LocalFollowupAlarm.playReceiverHaptics(context, true, finish)
-          else finish()
+          val prefs = context.getSharedPreferences(REMINDER_PREFS, Context.MODE_PRIVATE)
+          val scheduled = prefs.getLong(KEY_TEST_SCHEDULED_AT, 0L)
+          val fromAlarm = intent?.getLongExtra(EXTRA_ALARM_PLANNED_AT, 0L) ?: 0L
+          // Ignore stale PendingIntents after the user replaces a test.
+          if (scheduled <= 0L || (fromAlarm > 0L && fromAlarm != scheduled)) {
+            finish()
+          } else {
+            val received = System.currentTimeMillis()
+            prefs.edit().putLong(KEY_TEST_RECEIVED_AT, received)
+              .putLong(KEY_TEST_FALLBACK_RECEIVED_AT, received).commit()
+            Log.i("FollowupReminder", "Test fallback received; latenessMs=" + (received - scheduled))
+            val shouldVibrate = LocalFollowupAlarm.deliverTestReminder(context, {}, inService = true)
+            if (shouldVibrate) LocalFollowupAlarm.playReceiverHaptics(context, true, finish)
+            else finish()
+          }
         }
         ACTION_FOLLOWUP_ALARM -> {
-          val shouldVibrate = LocalFollowupAlarm.deliverAndContinue(context, {}, inService = true)
-          if (shouldVibrate) LocalFollowupAlarm.playReceiverHaptics(context, false, finish)
-          else finish()
+          val prefs = context.getSharedPreferences(REMINDER_PREFS, Context.MODE_PRIVATE)
+          val expected = prefs.getLong(KEY_DAILY_PLANNED_AT, 0L)
+          val fromAlarm = intent?.getLongExtra(EXTRA_ALARM_PLANNED_AT, 0L) ?: 0L
+          if (expected <= 0L || (fromAlarm > 0L && fromAlarm != expected)) {
+            finish()
+          } else {
+            val shouldVibrate = LocalFollowupAlarm.deliverAndContinue(
+              context, {}, inService = true, fromFallback = true)
+            if (shouldVibrate) LocalFollowupAlarm.playReceiverHaptics(context, false, finish)
+            else finish()
+          }
         }
         // Reboot, timezone changes and package updates must only re-arm the
         // next alarm. They must not create a surprise notification at 2 AM.
@@ -238,31 +268,76 @@ internal object LocalFollowupAlarm {
     val previousDate = preferences.getString(KEY_EARLIEST_OPEN_DATE, null)
     if (!forceReschedule && previousDate == normalizedDate) return
 
+    // Reconcile an undelivered formal reminder while the app is visible.
+    // Never retroactively vibrate a missed one-minute diagnostic test.
+    if (forceReschedule && normalizedDate != null) {
+      reconcileMissedDailyReminder(context, normalizedDate, preferences)
+    }
+
     preferences.edit().apply {
       if (normalizedDate == null) remove(KEY_EARLIEST_OPEN_DATE)
       else putString(KEY_EARLIEST_OPEN_DATE, normalizedDate)
-    }.apply()
+    }.commit()
     scheduleFromSavedState(context)
   }
 
-  fun deliverAndContinue(context: Context, onFinished: () -> Unit, inService: Boolean = false): Boolean {
-    val earliestOpenDate = context.getSharedPreferences(REMINDER_PREFS, Context.MODE_PRIVATE)
-      .getString(KEY_EARLIEST_OPEN_DATE, null)
+  private fun reconcileMissedDailyReminder(
+    context: Context,
+    earliestOpenDate: String,
+    prefs: android.content.SharedPreferences,
+  ) {
+    val now = java.time.LocalTime.now()
+    val today = LocalDate.now()
+    if (LocalDate.parse(earliestOpenDate).isAfter(today) ||
+      now.isBefore(java.time.LocalTime.of(9, 0)) ||
+      !now.isBefore(java.time.LocalTime.of(21, 0)) ||
+      prefs.getString(KEY_DAILY_NOTIFIED_DATE, "") == today.toString()) return
+
+    val scheduled = prefs.getLong(KEY_DAILY_PLANNED_AT, 0L)
+    // A catch-up only applies if this app had a saved alarm which should
+    // already have fired; it must not manufacture reminder events for new tasks.
+    val unresolvedToday = prefs.getString(KEY_UNRESOLVED_DAY, "") == today.toString()
+    if (!unresolvedToday && (scheduled <= 0L || scheduled > System.currentTimeMillis() ||
+      LocalDate.ofInstant(java.time.Instant.ofEpochMilli(scheduled), ZoneId.systemDefault())
+        != today)) return
+
+    val posted = postReminder(context, {}, inService = true)
+    if (prefs.getString(KEY_DAILY_NOTIFIED_DATE, "") == today.toString()) {
+      prefs.edit().putLong(KEY_DAILY_CATCHUP_AT, System.currentTimeMillis()).commit()
+      Log.i("FollowupReminder", "Missed daily reminder recovered on app foreground; haptics=$posted")
+    }
+  }
+
+  fun deliverAndContinue(
+    context: Context, onFinished: () -> Unit, inService: Boolean = false,
+    fromFallback: Boolean = false,
+  ): Boolean {
+    val prefs = context.getSharedPreferences(REMINDER_PREFS, Context.MODE_PRIVATE)
+    val earliestOpenDate = prefs.getString(KEY_EARLIEST_OPEN_DATE, null)
       ?: run { onFinished(); return false }
     val dueDate = LocalDate.parse(earliestOpenDate)
     val today = LocalDate.now()
-    val reminderTimePassed = !java.time.LocalTime.now().isBefore(java.time.LocalTime.of(9, 0))
+    val valid = !dueDate.isAfter(today) &&
+      !java.time.LocalTime.now().isBefore(java.time.LocalTime.of(9, 0))
     var vibrationAllowed = false
     try {
-      if (dueDate.isBefore(today) || (dueDate == today && reminderTimePassed)) {
-        // Do not lose today's notification if scheduling tomorrow's alarm fails.
+      if (valid && prefs.getString(KEY_DAILY_NOTIFIED_DATE, "") != today.toString()) {
         vibrationAllowed = postReminder(context, {}, inService)
       }
     } finally {
-      try {
-        scheduleFromSavedState(context)
-      } catch (error: Throwable) {
-        Log.e("FollowupReminder", "Could not schedule next day reminder", error)
+      // Primary failed to post? Preserve the fallback alarm rather than
+      // rescheduling now and accidentally cancelling the only second chance.
+      if (fromFallback && valid &&
+        prefs.getString(KEY_DAILY_NOTIFIED_DATE, "") != today.toString()) {
+        prefs.edit().putString(KEY_UNRESOLVED_DAY, today.toString()).commit()
+      }
+      if (fromFallback || !valid ||
+        prefs.getString(KEY_DAILY_NOTIFIED_DATE, "") == today.toString()) {
+        try {
+          scheduleFromSavedState(context)
+        } catch (error: Throwable) {
+          Log.e("FollowupReminder", "Could not schedule next day reminder", error)
+        }
       }
       onFinished()
     }
@@ -271,17 +346,21 @@ internal object LocalFollowupAlarm {
 
   fun scheduleFromSavedState(context: Context) {
     ensureNotificationChannel(context)
-    val preferences = context.getSharedPreferences(REMINDER_PREFS, Context.MODE_PRIVATE)
-    val earliestOpenDate = preferences.getString(KEY_EARLIEST_OPEN_DATE, null)
+    val prefs = context.getSharedPreferences(REMINDER_PREFS, Context.MODE_PRIVATE)
+    val earliestOpenDate = prefs.getString(KEY_EARLIEST_OPEN_DATE, null)
     val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
     val exactAllowed = Build.VERSION.SDK_INT < Build.VERSION_CODES.S || alarmManager.canScheduleExactAlarms()
     val foregroundOperation = alarmPendingIntent(context, true)
-    val receiverOperation = alarmPendingIntent(context, false)
+    val legacyReceiver = alarmPendingIntent(context, false)
+    val fallbackOperation = dailyFallbackPendingIntent(context)
     alarmManager.cancel(foregroundOperation)
-    alarmManager.cancel(receiverOperation)
+    alarmManager.cancel(legacyReceiver)
+    alarmManager.cancel(fallbackOperation)
     if (earliestOpenDate == null) {
       foregroundOperation.cancel()
-      receiverOperation.cancel()
+      legacyReceiver.cancel()
+      fallbackOperation.cancel()
+      prefs.edit().remove(KEY_DAILY_PLANNED_AT).remove(KEY_DAILY_FALLBACK_AT).commit()
       return
     }
 
@@ -291,40 +370,65 @@ internal object LocalFollowupAlarm {
     val zone = ZoneId.systemDefault()
     val nowMillis = System.currentTimeMillis()
     var triggerAtMillis = LocalDateTime.of(candidateDate, java.time.LocalTime.of(9, 0))
-      .atZone(zone)
-      .toInstant()
-      .toEpochMilli()
+      .atZone(zone).toInstant().toEpochMilli()
     if (triggerAtMillis <= nowMillis) {
       triggerAtMillis = LocalDateTime.of(today.plusDays(1), java.time.LocalTime.of(9, 0))
-        .atZone(zone)
-        .toInstant()
-        .toEpochMilli()
+        .atZone(zone).toInstant().toEpochMilli()
     }
 
+    val fallbackAt = if (exactAllowed) triggerAtMillis + FALLBACK_DELAY_MS else 0L
+    // Persist a stable alarm identity BEFORE dispatch. The receiver can reject
+    // an old broadcast after tasks or dates have changed.
+    prefs.edit().putLong(KEY_DAILY_PLANNED_AT, triggerAtMillis)
+      .putLong(KEY_DAILY_FALLBACK_AT, fallbackAt).commit()
+
+    val showIntent = context.packageManager.getLaunchIntentForPackage(context.packageName)?.let {
+      PendingIntent.getActivity(context, ALARM_REQUEST_CODE, it,
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+    }
     if (exactAllowed) {
-      val showIntent = context.packageManager.getLaunchIntentForPackage(context.packageName)?.let {
-        PendingIntent.getActivity(
-          context,
-          ALARM_REQUEST_CODE,
-          it,
-          PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+      // One user-facing alarm: primary native FGS, then a broadcast watchdog
+      // only if the first alarm did not successfully notify the user.
+      // Both are scheduled by AlarmManager, never by a busy-looping JS timer.
+      alarmManager.setAlarmClock(
+        AlarmManager.AlarmClockInfo(triggerAtMillis, showIntent),
+        alarmPendingIntent(context, true, triggerAtMillis)
+      )
+      try {
+        alarmManager.setAlarmClock(
+          AlarmManager.AlarmClockInfo(fallbackAt, showIntent),
+          dailyFallbackPendingIntent(context, triggerAtMillis)
         )
+      } catch (error: Throwable) {
+        Log.e("FollowupReminder", "Second daily delivery path unavailable", error)
       }
-      // Direct alarm-to-service delivery avoids a broadcast -> FGS hand-off
-      // and gets the system exact-alarm foreground-start allowance directly.
-      alarmManager.setAlarmClock(AlarmManager.AlarmClockInfo(triggerAtMillis, showIntent), foregroundOperation)
     } else {
-      AlarmManagerCompat.setAndAllowWhileIdle(alarmManager, AlarmManager.RTC_WAKEUP, triggerAtMillis, receiverOperation)
+      // Degraded mode if exact-alarm permission is revoked; the app should
+      // surface that state, not pretend precision is guaranteed.
+      AlarmManagerCompat.setAndAllowWhileIdle(
+        alarmManager, AlarmManager.RTC_WAKEUP, triggerAtMillis,
+        alarmPendingIntent(context, false, triggerAtMillis)
+      )
     }
   }
 
-  private fun alarmPendingIntent(context: Context, foreground: Boolean): PendingIntent {
+  private fun alarmPendingIntent(context: Context, foreground: Boolean, plannedAt: Long = 0L): PendingIntent {
     val intent = if (foreground) Intent(context, FollowupVibrationService::class.java)
     else Intent(context, FollowupReminderReceiver::class.java)
     intent.action = ACTION_FOLLOWUP_ALARM
+    if (plannedAt > 0L) intent.putExtra(EXTRA_ALARM_PLANNED_AT, plannedAt)
     val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
     return if (foreground) PendingIntent.getForegroundService(context, ALARM_REQUEST_CODE, intent, flags)
     else PendingIntent.getBroadcast(context, ALARM_REQUEST_CODE, intent, flags)
+  }
+
+  private fun dailyFallbackPendingIntent(context: Context, plannedAt: Long = 0L): PendingIntent {
+    val intent = Intent(context, FollowupReminderReceiver::class.java).apply {
+      action = ACTION_FOLLOWUP_ALARM
+      if (plannedAt > 0L) putExtra(EXTRA_ALARM_PLANNED_AT, plannedAt)
+    }
+    return PendingIntent.getBroadcast(context, DAILY_FALLBACK_REQUEST_CODE, intent,
+      PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
   }
 
   private fun postReminder(context: Context, onFinished: () -> Unit, inService: Boolean = false): Boolean {
@@ -349,9 +453,18 @@ internal object LocalFollowupAlarm {
   )
 
   fun deliverTestReminder(context: Context, onFinished: () -> Unit, inService: Boolean = false): Boolean {
-    context.getSharedPreferences(REMINDER_PREFS, Context.MODE_PRIVATE)
-      .edit().putLong(KEY_TEST_TRIGGERED_AT, System.currentTimeMillis()).commit()
-    return postTestReminder(context, onFinished, inService)
+    val prefs = context.getSharedPreferences(REMINDER_PREFS, Context.MODE_PRIVATE)
+    if (prefs.getLong(KEY_TEST_NOTIFIED_AT, 0L) > 0L) {
+      onFinished()
+      return false
+    }
+    prefs.edit().putLong(KEY_TEST_TRIGGERED_AT, System.currentTimeMillis()).commit()
+    val vibrate = postTestReminder(context, onFinished, inService)
+    if (prefs.getLong(KEY_TEST_NOTIFIED_AT, 0L) > 0L) {
+      val alarm = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+      alarm.cancel(testFallbackPendingIntent(context))
+    }
+    return vibrate
   }
 
   fun scheduleTestReminder(context: Context): Boolean {
@@ -359,33 +472,44 @@ internal object LocalFollowupAlarm {
     val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
     val operation = testAlarmPendingIntent(context, true)
     val legacyOperation = testAlarmPendingIntent(context, false)
+    val fallbackOperation = testFallbackPendingIntent(context)
     alarmManager.cancel(operation)
     alarmManager.cancel(legacyOperation)
+    alarmManager.cancel(fallbackOperation)
     val exactAlarmAllowed = Build.VERSION.SDK_INT < Build.VERSION_CODES.S || alarmManager.canScheduleExactAlarms()
     if (!exactAlarmAllowed) {
       throw IllegalStateException("请先为研伴开启系统「闹钟和提醒」权限，再执行一分钟准点测试。")
     }
     val triggerAtMillis = System.currentTimeMillis() + 60_000L
-    if (exactAlarmAllowed) {
-      val showIntent = context.packageManager.getLaunchIntentForPackage(context.packageName)?.let {
-        PendingIntent.getActivity(
-          context,
-          TEST_ALARM_REQUEST_CODE,
-          it,
-          PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
-      }
-      alarmManager.setAlarmClock(AlarmManager.AlarmClockInfo(triggerAtMillis, showIntent), operation)
-    }
+    val fallbackAt = triggerAtMillis + FALLBACK_DELAY_MS
     context.getSharedPreferences(REMINDER_PREFS, Context.MODE_PRIVATE).edit()
       .putLong(KEY_TEST_SCHEDULED_AT, triggerAtMillis)
+      .putLong(KEY_TEST_FALLBACK_AT, fallbackAt)
       .remove(KEY_TEST_TRIGGERED_AT)
       .remove(KEY_TEST_RECEIVED_AT)
+      .remove(KEY_TEST_FALLBACK_RECEIVED_AT)
       .remove(KEY_TEST_SERVICE_ENTERED_AT)
       .remove(KEY_TEST_NOTIFIED_AT)
       .remove(KEY_TEST_VIBRATION_AT)
       .remove(KEY_TEST_ERROR)
       .commit()
+    val showIntent = context.packageManager.getLaunchIntentForPackage(context.packageName)?.let {
+      PendingIntent.getActivity(context, TEST_ALARM_REQUEST_CODE, it,
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+    }
+    // The receiver is a distinct native target and does not require an FGS
+    // start. It cannot bypass package-level force stop, but can recover a
+    // foreground-service start failure with only one extra scheduled alarm.
+    alarmManager.setAlarmClock(AlarmManager.AlarmClockInfo(triggerAtMillis, showIntent),
+      testAlarmPendingIntent(context, true, triggerAtMillis))
+    try {
+      alarmManager.setAlarmClock(AlarmManager.AlarmClockInfo(fallbackAt, showIntent),
+        testFallbackPendingIntent(context, triggerAtMillis))
+    } catch (error: Throwable) {
+      Log.e("FollowupReminder", "Second test delivery path unavailable", error)
+      context.getSharedPreferences(REMINDER_PREFS, Context.MODE_PRIVATE)
+        .edit().putString(KEY_TEST_ERROR, "备援闹钟注册失败：" + (error.message ?: "")).commit()
+    }
     return true
   }
 
@@ -438,9 +562,16 @@ internal object LocalFollowupAlarm {
       // A fresh notification can alert again when yesterday's reminder is still in the shade.
       manager.cancel(notificationId)
       manager.notify(notificationId, notification)
+      val prefs = context.getSharedPreferences(REMINDER_PREFS, Context.MODE_PRIVATE)
       if (notificationId == TEST_NOTIFICATION_ID) {
-        context.getSharedPreferences(REMINDER_PREFS, Context.MODE_PRIVATE).edit()
-          .putLong(KEY_TEST_NOTIFIED_AT, System.currentTimeMillis()).apply()
+        prefs.edit().putLong(KEY_TEST_NOTIFIED_AT, System.currentTimeMillis()).commit()
+      } else if (notificationId == NOTIFICATION_ID) {
+        // A persistent delivery ledger prevents a fallback alarm, late
+        // primary FGS, or foreground reconciliation vibrating twice today.
+        prefs.edit().putString(KEY_DAILY_NOTIFIED_DATE, LocalDate.now().toString())
+          .putLong(KEY_DAILY_NOTIFIED_AT, System.currentTimeMillis()).commit()
+        val alarm = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        alarm.cancel(dailyFallbackPendingIntent(context))
       }
     } catch (_: SecurityException) {
       // The OS may revoke notification permission while the scheduled alarm remains.
@@ -523,13 +654,23 @@ internal object LocalFollowupAlarm {
     }
   }
 
-  private fun testAlarmPendingIntent(context: Context, foreground: Boolean): PendingIntent {
+  private fun testAlarmPendingIntent(context: Context, foreground: Boolean, plannedAt: Long = 0L): PendingIntent {
     val intent = if (foreground) Intent(context, FollowupVibrationService::class.java)
     else Intent(context, FollowupReminderReceiver::class.java)
     intent.action = ACTION_TEST_ALARM
+    if (plannedAt > 0L) intent.putExtra(EXTRA_ALARM_PLANNED_AT, plannedAt)
     val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
     return if (foreground) PendingIntent.getForegroundService(context, TEST_ALARM_REQUEST_CODE, intent, flags)
     else PendingIntent.getBroadcast(context, TEST_ALARM_REQUEST_CODE, intent, flags)
+  }
+
+  private fun testFallbackPendingIntent(context: Context, plannedAt: Long = 0L): PendingIntent {
+    val intent = Intent(context, FollowupReminderReceiver::class.java).apply {
+      action = ACTION_TEST_ALARM
+      if (plannedAt > 0L) putExtra(EXTRA_ALARM_PLANNED_AT, plannedAt)
+    }
+    return PendingIntent.getBroadcast(context, TEST_FALLBACK_REQUEST_CODE, intent,
+      PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
   }
 
   fun ensureNotificationChannel(context: Context) {

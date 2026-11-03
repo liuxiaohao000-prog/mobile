@@ -9,6 +9,12 @@ const SCHEDULE_WINDOW_DAYS = 30;
 const MAX_SCHEDULED_REMINDERS = 55;
 export type ReminderDiagnostics = {
   testScheduledAt: number;
+  testFallbackAt: number;
+  testFallbackReceivedAt: number;
+  dailyPlannedAt: number;
+  dailyFallbackAt: number;
+  dailyNotifiedAt: number;
+  dailyCatchupAt: number;
   testTriggeredAt: number;
   highImportance: boolean;
   vibrationEnabled: boolean;
