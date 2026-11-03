@@ -1851,6 +1851,9 @@ function SettingsPage({ onRefresh }: Props) {
       const selected = await requestAutomaticBackupAccess();
       if (!selected) return;
       setBackupDirectoryName(await getAutomaticBackupDirectoryName());
+      // Starting the backup observer after an optional permission grant is
+      // essential; a database opened earlier will not re-register itself.
+      startAutomaticBackup(await getDatabase());
       Alert.alert('备份文件夹已更新', '已有自动备份已复制到新文件夹。此文件夹会用于后续自动备份和恢复。');
     } catch (error) {
       Alert.alert('文件夹设置未完成', error instanceof Error ? error.message : '请重新选择备份文件夹。');
