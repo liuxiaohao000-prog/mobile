@@ -1,0 +1,46 @@
+{
+  "expo": {
+    "name": "研伴",
+    "slug": "patient-followup-local",
+    "scheme": "patientfollowup",
+    "version": "0.1.14",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.local.patientfollowup"
+    },
+    "android": {
+      "package": "com.local.patientfollowup",
+      "versionCode": 15,
+      "permissions": [
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.SCHEDULE_EXACT_ALARM"
+      ]
+    },
+    "plugins": [
+      [
+        "expo-sqlite",
+        {
+          "useSQLCipher": true
+        }
+      ],
+      "expo-secure-store",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "需要访问照片以选择患者心电图或可选的同意证明。",
+          "cameraPermission": false,
+          "microphonePermission": false
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "defaultChannel": "followup-reminders-v3"
+        }
+      ]
+    ]
+  }
+}

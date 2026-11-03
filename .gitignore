@@ -1,0 +1,14 @@
+node_modules/
+.expo/
+.expo-home/
+.tmp-build/
+dist/
+web-build/
+ios/
+*.jks
+*.keystore
+!android/app/debug.keystore
+*.p8
+*.mobileprovision
+*.orig.*
+.npm-cache/
