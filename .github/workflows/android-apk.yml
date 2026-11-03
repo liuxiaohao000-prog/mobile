@@ -27,11 +27,12 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - uses: android-actions/setup-android@v3
+      # ubuntu-24.04 runners already provide Android SDK cmdline-tools;
+      # setup-android@v3 currently tries the removed SDK package 'tools'.
       - name: Install Android SDK packages
         run: |
-          sdkmanager --install "platforms;android-37" "build-tools;37.0.0" "ndk;27.1.12297006"
-          yes | sdkmanager --licenses || true
+          "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --install "platforms;android-37" "build-tools;37.0.0" "ndk;27.1.12297006"
+          yes | "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --licenses || true
       - name: Build signed preview APK
         working-directory: android
         run: |
