@@ -458,45 +458,65 @@ function HomePage({
   onOpen,
   onRefresh,
 }: Props & { summary: DashboardSummary; tasks: FollowupTask[]; screenings: Screening[] }) {
-  const todayTasks = tasks.filter((task) => task.status === 'DUE' || task.status === 'OVERDUE');
-  const openScreenings = screenings.slice(0, 5);
+  const todayTasks = tasks
+    .filter((task) => task.status === 'DUE' || task.status === 'OVERDUE')
+    .sort((a, b) => (a.status === 'OVERDUE' ? -1 : 0) - (b.status === 'OVERDUE' ? -1 : 0));
+  const openScreenings = screenings.slice(0, 4);
+  const toScreening = (screening: Screening) => {
+    if (screening.status === 'ANALYZING') {
+      Alert.alert('AI 分析中', '请等待当前分析完成后再打开这条预筛。');
+    } else if (screening.status === 'DRAFT') {
+      onOpen({ kind: 'screening', id: screening.id });
+    } else if (screening.status === 'AI_SKIPPED') {
+      onOpen({ kind: 'consent', id: screening.id });
+    } else {
+      onOpen({ kind: 'result', id: screening.id });
+    }
+  };
   return (
     <ScrollView contentContainerStyle={styles.pageContent}>
+      <View style={styles.homeTitleBlock}>
+        <Text style={styles.eyebrow}>{new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' })}</Text>
+        <Text style={styles.homeTitle}>今日工作</Text>
+        <Text style={styles.homeDescription}>从待办开始，让每一位患者的随访都有记录。</Text>
+      </View>
       <View style={styles.hero}>
-        <Text style={styles.eyebrow}>研究项目工作台</Text>
-        <Text style={styles.heroTitle}>患者入组与随访</Text>
-        <Text style={styles.heroCopy}>查看研究进度，继续处理患者和随访任务。</Text>
-        <PrimaryButton title="新增或补录患者" onPress={() => onOpen({ kind: 'patientEntry' })} />
+        <Text style={styles.homeDueLabel}>待处理随访</Text>
+        <View style={styles.homeDueRow}>
+          <Text style={styles.homeDueNumber}>{todayTasks.length}</Text>
+          <Text style={styles.homeDueUnit}>项任务</Text>
+        </View>
+        <View style={styles.homeStatRow}>
+          <View style={styles.homeStatItem}>
+            <Text style={styles.homeStatNumber}>{summary.dueTasks}</Text>
+            <Text style={styles.homeStatLabel}>今日到期</Text>
+          </View>
+          <View style={styles.homeStatItem}>
+            <Text style={[styles.homeStatNumber, { color: theme.danger }]}>{summary.overdueTasks}</Text>
+            <Text style={styles.homeStatLabel}>已逾期</Text>
+          </View>
+          <View style={styles.homeStatItem}>
+            <Text style={styles.homeStatNumber}>{summary.activePatients}</Text>
+            <Text style={styles.homeStatLabel}>在组患者</Text>
+          </View>
+        </View>
       </View>
 
-      <View style={styles.metricRow}>
-        <MetricCard label="今日待随访" value={String(summary.dueTasks)} tone="gold" />
-        <MetricCard label="逾期未完成" value={String(summary.overdueTasks)} tone="red" />
-      </View>
-      <View style={styles.metricRow}>
-        <MetricCard label="在组患者" value={String(summary.activePatients)} tone="green" />
-        <MetricCard label="全部任务" value={String(tasks.length)} tone="blue" />
-      </View>
+      <SectionHeading title="优先处理" action="查看全部随访" onPress={() => onOpen({ kind: 'tab' })} />
+      {todayTasks.length === 0 ? (
+        <EmptyState title="今天没有到期待办" subtitle="已安排的随访会按计划时间出现在这里。" />
+      ) : (
+        todayTasks.slice(0, 4).map((task) => (
+          <TaskCard key={task.id} task={task} onPress={() => onOpen({ kind: 'task', id: task.id })} />
+        ))
+      )}
 
-      <SectionHeading title="待处理预筛" action="刷新" onPress={() => { onRefresh(); }} />
+      <SectionHeading title="待处理预筛" action="刷新" onPress={() => { void onRefresh(); }} />
       {openScreenings.length === 0 ? (
-        <EmptyState title="没有待处理预筛" subtitle="可选择 AI 辅助预筛，也可跳过 AI，继续由授权人员人工核实。" />
+        <EmptyState title="暂无待处理预筛" subtitle="新增患者可以先录入资料，再进行资格核实。" />
       ) : (
         openScreenings.map((screening) => (
-          <Pressable
-            key={screening.id}
-            onPress={() => {
-              if (screening.status === 'ANALYZING') {
-                Alert.alert('AI 分析中', '请等待当前分析完成后再打开这条预筛。');
-              } else if (screening.status === 'DRAFT') {
-                onOpen({ kind: 'screening', id: screening.id });
-              } else if (screening.status === 'AI_SKIPPED') {
-                onOpen({ kind: 'consent', id: screening.id });
-              } else {
-                onOpen({ kind: 'result', id: screening.id });
-              }
-            }}
-          >
+          <Pressable key={screening.id} accessibilityRole="button" onPress={() => toScreening(screening)}>
             <Card style={styles.screeningCard}>
               <View style={styles.taskTop}>
                 <View style={{ flex: 1 }}>
@@ -505,19 +525,13 @@ function HomePage({
                 </View>
                 <ScreeningStatusBadge status={screening.status} />
               </View>
-              <Text style={styles.screeningAction}>{screening.status === 'DRAFT' ? '继续填写  ›' : screening.status === 'ANALYZING' ? '正在处理' : screening.status === 'AI_SKIPPED' ? '继续患者同意  ›' : '查看审核结果  ›'}</Text>
+              <Text style={styles.screeningAction}>继续处理  ›</Text>
             </Card>
           </Pressable>
         ))
       )}
-
-      <SectionHeading title="今天需要关注" />
-      {todayTasks.length === 0 ? (
-        <EmptyState title="今天没有待办" subtitle="新的随访任务会在计划日期出现在这里。" />
-      ) : (
-        todayTasks.slice(0, 4).map((task) => <TaskCard key={task.id} task={task} onPress={() => onOpen({ kind: 'task', id: task.id })} />)
-      )}
-      <View style={{ height: 18 }} />
+      <PrimaryButton title="新增或补录患者" onPress={() => onOpen({ kind: 'patientEntry' })} />
+      <View style={{ height: 12 }} />
     </ScrollView>
   );
 }
@@ -2314,7 +2328,7 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: theme.canvas, paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight ?? 0) : 0 },
   fill: { flex: 1 },
   appHeader: {
-    height: 60,
+    height: 54,
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 18,
@@ -2326,12 +2340,23 @@ const styles = StyleSheet.create({
   brandMarkText: { color: '#FFFFFF', fontSize: 18, fontWeight: '800' },
   brandName: { color: theme.ink, fontSize: 16, fontWeight: '700', letterSpacing: 0.2 },
   brandCaption: { color: theme.muted, fontSize: 12, marginTop: 1 },
-  pageContent: { padding: 20, paddingBottom: 32, gap: 14 },
-  hero: { padding: 20, borderRadius: 18, backgroundColor: theme.blueSoft, borderWidth: 1, borderColor: '#D6E8F2' },
+  pageContent: { paddingHorizontal: 18, paddingTop: 20, paddingBottom: 32, gap: 14 },
+  hero: { padding: 20, borderRadius: 20, backgroundColor: theme.primarySoft },
+  homeTitleBlock: { paddingBottom: 2, gap: 4 },
+  homeTitle: { color: theme.ink, fontSize: 28, lineHeight: 36, fontWeight: '700' },
+  homeDescription: { color: theme.muted, fontSize: 14, lineHeight: 22 },
+  homeDueLabel: { color: theme.primaryDark, fontSize: 14, fontWeight: '600' },
+  homeDueRow: { flexDirection: 'row', alignItems: 'baseline', gap: 8, marginTop: 6 },
+  homeDueNumber: { fontSize: 44, lineHeight: 52, fontWeight: '700', color: theme.ink },
+  homeDueUnit: { fontSize: 14, color: theme.muted },
+  homeStatRow: { flexDirection: 'row', gap: 10, marginTop: 14 },
+  homeStatItem: { flex: 1, backgroundColor: theme.paper, borderRadius: 13, padding: 12 },
+  homeStatNumber: { fontSize: 22, lineHeight: 27, color: theme.ink, fontWeight: '700' },
+  homeStatLabel: { fontSize: 12, color: theme.muted, marginTop: 4 },
   eyebrow: { color: theme.primaryDark, letterSpacing: 0.3, fontSize: 12, fontWeight: '700' },
   heroTitle: { color: theme.ink, ...typeScale.pageTitle, marginTop: 8 },
   heroCopy: { color: theme.muted, fontSize: 16, lineHeight: 24, marginTop: 7, marginBottom: 18 },
-  card: { backgroundColor: theme.paper, borderRadius: 16, padding: 18, borderWidth: 1, borderColor: theme.border },
+  card: { backgroundColor: theme.paper, borderRadius: 16, padding: 18, borderWidth: StyleSheet.hairlineWidth, borderColor: theme.border },
   entryCard: { padding: 20, minHeight: 190 },
   entryIcon: { width: 48, height: 48, borderRadius: 14, backgroundColor: theme.primarySoft, alignItems: 'center', justifyContent: 'center', marginBottom: 12 },
   entryTitle: { color: theme.ink, fontSize: 18, lineHeight: 25, fontWeight: '600' },
