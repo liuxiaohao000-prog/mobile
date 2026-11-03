@@ -755,6 +755,16 @@ export async function getTasks(): Promise<FollowupTask[]> {
   }));
 }
 
+// Counts all formally enrolled patients, including patients who later exited.
+// This is intentionally distinct from DashboardSummary.activePatients.
+export async function getTotalEnrolledPatientCount(): Promise<number> {
+  const database = await getDatabase();
+  const result = await database.getFirstAsync<{ count: number }>(
+    'SELECT COUNT(*) AS count FROM patient',
+  );
+  return result?.count ?? 0;
+}
+
 export async function getDashboardSummary(): Promise<DashboardSummary> {
   const database = await getDatabase();
   const patientCount = await database.getFirstAsync<{ count: number }>(

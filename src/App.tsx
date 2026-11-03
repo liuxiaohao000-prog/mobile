@@ -85,6 +85,13 @@ import {
   setOperatorName,
   type AiSettings,
 } from './services/settings';
+import {
+  getBackgroundMonitorState,
+  setBackgroundMonitorEnabled,
+  syncBackgroundMonitorSnapshot,
+  restoreBackgroundMonitorIfEnabled,
+  type BackgroundMonitorState,
+} from './services/backgroundMonitor';
 import { dateKey, formatLocalDateTime, parseLocalDate, parseLocalDateTime } from './domain/dates';
 import { STUDY_PROTOCOL_VERSION } from './config/studyProtocol';
 import { theme, typeScale } from './theme';
@@ -1727,6 +1734,8 @@ function SettingsPage({ onRefresh }: Props) {
   const [reminderDiagnostics, setReminderDiagnostics] = useState<ReminderDiagnostics | null>(null);
   const [reminderDetailsOpen, setReminderDetailsOpen] = useState(false);
   const [testFeedback, setTestFeedback] = useState('');
+  const [monitorState, setMonitorState] = useState<BackgroundMonitorState>({ enabled: false, running: false, lastError: '' });
+  const [monitorBusy, setMonitorBusy] = useState(false);
   const [backupDetailsOpen, setBackupDetailsOpen] = useState(false);
   const [aiDetailsOpen, setAiDetailsOpen] = useState(false);
   const [operatorDetailsOpen, setOperatorDetailsOpen] = useState(false);
@@ -1734,6 +1743,25 @@ function SettingsPage({ onRefresh }: Props) {
   const [configuringReminders, setConfiguringReminders] = useState(false);
   const [backupDirectoryName, setBackupDirectoryName] = useState<string | null>(null);
   const [changingBackupDirectory, setChangingBackupDirectory] = useState(false);
+  const refreshMonitorStatus = useCallback(async () => {
+    if (Platform.OS === 'android') setMonitorState(await getBackgroundMonitorState());
+  }, []);
+  const toggleMonitor = async (enabled: boolean) => {
+    if (monitorBusy) return;
+    setMonitorBusy(true);
+    try {
+      await setBackgroundMonitorEnabled(enabled);
+      await refreshMonitorStatus();
+      if (enabled) {
+        Alert.alert('后台随访监测已开启', '原生常驻通知显示三项汇总数字。点击通知可返回工作台，也可在通知中停止监测。系统仍有权在强行停止或资源不足时终止服务。');
+      }
+    } catch (error) {
+      Alert.alert('无法切换后台监测', error instanceof Error ? error.message : '请检查通知权限并重试。');
+      await refreshMonitorStatus().catch(() => undefined);
+    } finally {
+      setMonitorBusy(false);
+    }
+  };
   const refreshNotificationPermissions = useCallback(async () => {
     const [notification, exactAlarm, diagnostics] = await Promise.all([
       Notifications.getPermissionsAsync(),
@@ -1750,6 +1778,7 @@ function SettingsPage({ onRefresh }: Props) {
       getOperatorName(),
       getAutomaticBackupDirectoryName(),
       refreshNotificationPermissions(),
+      refreshMonitorStatus(),
     ])
       .then(([ai, operator, directoryName]) => {
         setSettings(ai);
@@ -1758,10 +1787,13 @@ function SettingsPage({ onRefresh }: Props) {
       })
       .catch(() => undefined);
     const subscription = AppState.addEventListener('change', (state) => {
-      if (state === 'active') void refreshNotificationPermissions();
+      if (state === 'active') {
+        void refreshNotificationPermissions();
+        void refreshMonitorStatus();
+      }
     });
     return () => subscription.remove();
-  }, [refreshNotificationPermissions]);
+  }, [refreshNotificationPermissions, refreshMonitorStatus]);
   const change = (key: keyof AiSettings, value: string) => setSettings((current) => ({ ...current, [key]: value }));
   const save = async () => {
     try {
@@ -1938,6 +1970,35 @@ function SettingsPage({ onRefresh }: Props) {
             disabled={configuringReminders}
             loading={configuringReminders}
           />
+          {Platform.OS === 'android' ? (
+            <View style={{ marginTop: 14, marginBottom: 6 }}>
+              <View style={styles.taskTop}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.cardHeading}>后台随访监测</Text>
+                  <Text style={styles.settingsSubtitle}>
+                    {monitorState.enabled
+                      ? monitorState.running ? '运行中 · 通知栏显示今日随访数据' : '已启用 · 正在等待系统启动服务'
+                      : '未开启 · 可自主选择常驻通知'}
+                  </Text>
+                </View>
+                <Switch
+                  value={monitorState.enabled}
+                  disabled={monitorBusy || !notificationGranted}
+                  onValueChange={(value) => void toggleMonitor(value)}
+                  accessibilityLabel="后台随访监测"
+                />
+              </View>
+              <Text style={styles.helperText}>
+                开启后持续显示：今日待随访（含逾期）、今日已完成、入组总人数。数据本地汇总、不联网、不定时轮询；可随时关闭。
+              </Text>
+              {!notificationGranted ? (
+                <Text style={styles.helperText}>需要先在上方允许研伴发送通知。</Text>
+              ) : null}
+              {monitorState.lastError ? (
+                <Text style={[styles.helperText, { color: theme.danger }]}>运行异常：{monitorState.lastError}</Text>
+              ) : null}
+            </View>
+          ) : null}
           <Pressable
             accessibilityRole="button"
             accessibilityState={{ expanded: reminderDetailsOpen }}
@@ -2058,7 +2119,7 @@ function SettingsPage({ onRefresh }: Props) {
           expanded={aboutDetailsOpen}
           onToggle={() => setAboutDetailsOpen((value) => !value)}
         >
-          <InfoLine label="应用版本" value="2.0.2-preview" />
+          <InfoLine label="应用版本" value="2.0.3-preview" />
           <InfoLine label="研究方案" value={STUDY_PROTOCOL_VERSION} />
           <Text style={styles.helperText}>AI 用于辅助预筛。正式入组仍需要授权人员人工核实。</Text>
         </SettingsDisclosure>
@@ -2162,6 +2223,8 @@ export default function App() {
       const permissionChanged = exactAlarmPermissionRef.current !== null
         && exactAlarmPermissionRef.current !== exactAlarmGranted;
       await refreshLocalReminders(forceReminderReschedule || permissionChanged);
+      // Event-driven update: never poll the encrypted database from the monitor.
+      await syncBackgroundMonitorSnapshot(nextTasks).catch(() => undefined);
       exactAlarmPermissionRef.current = exactAlarmGranted;
     } catch (error) {
       if (error instanceof Error) setFatalError(error.message);
@@ -2184,6 +2247,7 @@ export default function App() {
       // Re-register native alarms after a fresh launch, including after a
       // device reboot, package update, or a force-stop that cleared PendingIntents.
       await refresh(true);
+      await restoreBackgroundMonitorIfEnabled().catch(() => undefined);
       initializationComplete.current = true;
       setReady(true);
     } catch (error) {
@@ -2255,6 +2319,9 @@ export default function App() {
     const openFollowups = (url: string | null | undefined) => {
       if (url?.startsWith('patientfollowup://followups')) {
         setTab('followups');
+        setPage({ kind: 'tab' });
+      } else if (url?.startsWith('patientfollowup://home')) {
+        setTab('home');
         setPage({ kind: 'tab' });
       }
     };

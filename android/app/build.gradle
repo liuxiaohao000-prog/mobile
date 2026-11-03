@@ -92,8 +92,8 @@ android {
         applicationId 'com.local.patientfollowup'
         minSdkVersion 29
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 18
-        versionName "2.0.2-preview"
+        versionCode 19
+        versionName "2.0.3-preview"
 
         buildConfigField "String", "REACT_NATIVE_RELEASE_LEVEL", "\"${findProperty('reactNativeReleaseLevel') ?: 'stable'}\""
     }
