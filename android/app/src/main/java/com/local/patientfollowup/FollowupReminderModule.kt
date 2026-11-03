@@ -209,9 +209,8 @@ class FollowupReminderReceiver : BroadcastReceiver() {
             finish()
           } else {
             val received = System.currentTimeMillis()
-            prefs.edit().putLong(KEY_TEST_RECEIVED_AT, received)
-              .putLong(KEY_TEST_FALLBACK_RECEIVED_AT, received).commit()
-            Log.i("FollowupReminder", "Test fallback received; latenessMs=" + (received - scheduled))
+            prefs.edit().putLong(KEY_TEST_RECEIVED_AT, received).commit()
+            Log.i("FollowupReminder", "Primary broadcast received; latenessMs=" + (received - scheduled))
             val shouldVibrate = LocalFollowupAlarm.deliverTestReminder(context, {}, inService = true)
             if (shouldVibrate) LocalFollowupAlarm.playReceiverHaptics(context, true, finish)
             else finish()
@@ -225,7 +224,7 @@ class FollowupReminderReceiver : BroadcastReceiver() {
             finish()
           } else {
             val shouldVibrate = LocalFollowupAlarm.deliverAndContinue(
-              context, {}, inService = true, fromFallback = true)
+              context, {}, inService = true)
             if (shouldVibrate) LocalFollowupAlarm.playReceiverHaptics(context, false, finish)
             else finish()
           }
@@ -327,17 +326,15 @@ internal object LocalFollowupAlarm {
     } finally {
       // Primary failed to post? Preserve the fallback alarm rather than
       // rescheduling now and accidentally cancelling the only second chance.
-      if (fromFallback && valid &&
+      if (valid &&
         prefs.getString(KEY_DAILY_NOTIFIED_DATE, "") != today.toString()) {
         prefs.edit().putString(KEY_UNRESOLVED_DAY, today.toString()).commit()
       }
-      if (fromFallback || !valid ||
-        prefs.getString(KEY_DAILY_NOTIFIED_DATE, "") == today.toString()) {
-        try {
-          scheduleFromSavedState(context)
-        } catch (error: Throwable) {
-          Log.e("FollowupReminder", "Could not schedule next day reminder", error)
-        }
+      // A single broadcast owns the daily schedule: always re-arm tomorrow.
+      try {
+        scheduleFromSavedState(context)
+      } catch (error: Throwable) {
+        Log.e("FollowupReminder", "Could not schedule next day reminder", error)
       }
       onFinished()
     }
@@ -376,38 +373,24 @@ internal object LocalFollowupAlarm {
         .atZone(zone).toInstant().toEpochMilli()
     }
 
-    val fallbackAt = if (exactAllowed) triggerAtMillis + FALLBACK_DELAY_MS else 0L
-    // Persist a stable alarm identity BEFORE dispatch. The receiver can reject
-    // an old broadcast after tasks or dates have changed.
+    // V2.0.7 rollback: a single direct broadcast, as in V2.0.3/V2.0.4.
+    // FGS-start PendingIntents regressed on real background tests.
     prefs.edit().putLong(KEY_DAILY_PLANNED_AT, triggerAtMillis)
-      .putLong(KEY_DAILY_FALLBACK_AT, fallbackAt).commit()
+      .remove(KEY_DAILY_FALLBACK_AT).commit()
 
     val showIntent = context.packageManager.getLaunchIntentForPackage(context.packageName)?.let {
       PendingIntent.getActivity(context, ALARM_REQUEST_CODE, it,
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
     }
     if (exactAllowed) {
-      // One user-facing alarm: primary native FGS, then a broadcast watchdog
-      // only if the first alarm did not successfully notify the user.
-      // Both are scheduled by AlarmManager, never by a busy-looping JS timer.
       alarmManager.setAlarmClock(
         AlarmManager.AlarmClockInfo(triggerAtMillis, showIntent),
-        alarmPendingIntent(context, true, triggerAtMillis)
+        alarmPendingIntent(context, false, triggerAtMillis),
       )
-      try {
-        alarmManager.setAlarmClock(
-          AlarmManager.AlarmClockInfo(fallbackAt, showIntent),
-          dailyFallbackPendingIntent(context, triggerAtMillis)
-        )
-      } catch (error: Throwable) {
-        Log.e("FollowupReminder", "Second daily delivery path unavailable", error)
-      }
     } else {
-      // Degraded mode if exact-alarm permission is revoked; the app should
-      // surface that state, not pretend precision is guaranteed.
       AlarmManagerCompat.setAndAllowWhileIdle(
         alarmManager, AlarmManager.RTC_WAKEUP, triggerAtMillis,
-        alarmPendingIntent(context, false, triggerAtMillis)
+        alarmPendingIntent(context, false, triggerAtMillis),
       )
     }
   }
@@ -481,10 +464,10 @@ internal object LocalFollowupAlarm {
       throw IllegalStateException("请先为研伴开启系统「闹钟和提醒」权限，再执行一分钟准点测试。")
     }
     val triggerAtMillis = System.currentTimeMillis() + 60_000L
-    val fallbackAt = triggerAtMillis + FALLBACK_DELAY_MS
+    // Reset the previous test ledger BEFORE registering the broadcast.
     context.getSharedPreferences(REMINDER_PREFS, Context.MODE_PRIVATE).edit()
       .putLong(KEY_TEST_SCHEDULED_AT, triggerAtMillis)
-      .putLong(KEY_TEST_FALLBACK_AT, fallbackAt)
+      .remove(KEY_TEST_FALLBACK_AT)
       .remove(KEY_TEST_TRIGGERED_AT)
       .remove(KEY_TEST_RECEIVED_AT)
       .remove(KEY_TEST_FALLBACK_RECEIVED_AT)
@@ -497,19 +480,10 @@ internal object LocalFollowupAlarm {
       PendingIntent.getActivity(context, TEST_ALARM_REQUEST_CODE, it,
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
     }
-    // The receiver is a distinct native target and does not require an FGS
-    // start. It cannot bypass package-level force stop, but can recover a
-    // foreground-service start failure with only one extra scheduled alarm.
-    alarmManager.setAlarmClock(AlarmManager.AlarmClockInfo(triggerAtMillis, showIntent),
-      testAlarmPendingIntent(context, true, triggerAtMillis))
-    try {
-      alarmManager.setAlarmClock(AlarmManager.AlarmClockInfo(fallbackAt, showIntent),
-        testFallbackPendingIntent(context, triggerAtMillis))
-    } catch (error: Throwable) {
-      Log.e("FollowupReminder", "Second test delivery path unavailable", error)
-      context.getSharedPreferences(REMINDER_PREFS, Context.MODE_PRIVATE)
-        .edit().putString(KEY_TEST_ERROR, "备援闹钟注册失败：" + (error.message ?: "")).commit()
-    }
+    alarmManager.setAlarmClock(
+      AlarmManager.AlarmClockInfo(triggerAtMillis, showIntent),
+      testAlarmPendingIntent(context, false, triggerAtMillis),
+    )
     return true
   }
 

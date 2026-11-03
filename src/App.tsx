@@ -2066,7 +2066,7 @@ function SettingsPage({ onRefresh }: Props) {
               ) : null}
               {reminderDiagnostics && reminderDiagnostics.testScheduledAt > 0 ? (
                 <>
-                  <Text style={styles.helperText}>备援计划：{reminderDiagnostics.testFallbackAt > 0 ? new Date(reminderDiagnostics.testFallbackAt).toLocaleString("zh-CN", { hour12: false }) : "未注册"} · 广播入口：{reminderDiagnostics.testFallbackReceivedAt > 0 ? "已收到" : "尚无记录"}</Text>
+                  <Text style={styles.helperText}>系统入口：原生广播 · {reminderDiagnostics.testReceiverReceivedAt > 0 ? "已到达" : "尚无到达记录"}</Text>
                   <Text style={styles.helperText}>计划触发：{new Date(reminderDiagnostics.testScheduledAt).toLocaleString('zh-CN', { hour12: false })}</Text>
                   {reminderDiagnostics.testServiceEnteredAt > 0 || reminderDiagnostics.testReceiverReceivedAt > 0 ? (
                     <Text style={styles.helperText}>
@@ -2083,7 +2083,7 @@ function SettingsPage({ onRefresh }: Props) {
               {Platform.OS === 'android' && reminderDiagnostics !== null && reminderDiagnostics.dailyPlannedAt > 0 ? (
                 <Text style={styles.helperText}>
                   正式随访闹钟：{new Date(reminderDiagnostics.dailyPlannedAt).toLocaleString('zh-CN', { hour12: false })}
-                  {' · '}备用投递：{reminderDiagnostics.dailyFallbackAt > 0 ? '已安排' : '无精确授权'}
+                  {' · '}接收入口：原生广播
                   {' · '}上次通知确认：{reminderDiagnostics.dailyNotifiedAt > 0
                     ? new Date(reminderDiagnostics.dailyNotifiedAt).toLocaleString('zh-CN', { hour12: false }) : '暂无'}
                 </Text>
@@ -2103,7 +2103,7 @@ function SettingsPage({ onRefresh }: Props) {
                 <Text style={[styles.helperText, { color: theme.danger }]}>上次测试错误：{reminderDiagnostics.testError}</Text>
               ) : null}
               {testFeedback ? <Text style={styles.helperText}>{testFeedback}</Text> : null}
-              <Text style={styles.helperText}>当前为双通道原生提醒：准点由系统直接唤起提醒服务；若未确认通知，90 秒后由独立系统广播补投一次。成功后自动去重。正常划掉任务应不影响系统闹钟，但系统级强行停止后 Android 无法保证投递。</Text>
+              <Text style={styles.helperText}>V2.0.7 已回退到原生广播直接投递：系统到点启动接收器，先发布通知，再执行最多 5 秒震动；不经由前台服务启动作为首要环节。请验证正常返回桌面与息屏是否恢复准时提醒。</Text>
               <View style={{ height: 12 }} />
               <PrimaryButton title="立即测试通知（震动 5 秒）" onPress={() => void testNotification(false)} secondary disabled={!notificationGranted} />
               <View style={{ height: 8 }} />
@@ -2168,7 +2168,7 @@ function SettingsPage({ onRefresh }: Props) {
           expanded={aboutDetailsOpen}
           onToggle={() => setAboutDetailsOpen((value) => !value)}
         >
-          <InfoLine label="应用版本" value="2.0.6-preview" />
+          <InfoLine label="应用版本" value="2.0.7-preview" />
           <InfoLine label="研究方案" value={STUDY_PROTOCOL_VERSION} />
           <Text style={styles.helperText}>AI 用于辅助预筛。正式入组仍需要授权人员人工核实。</Text>
         </SettingsDisclosure>
