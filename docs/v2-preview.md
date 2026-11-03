@@ -84,3 +84,20 @@ GitHub Actions `Android APK` 会在 `v2/**` 分支构建、进行 TypeScript 检
 - 保留用户可选的独立低功耗监测服务，仅负责可见的后台监测摘要，不作为消息发送前置条件。
 - 本次为恢复基础可用性的回归修复，编译成功后仍须在普通退出、息屏、划掉最近任务的场景上实测。进程/包被系统强行停止时不能保证送达。
 
+
+## V2.0.8：跨品牌的后台运行授权入口
+
+背景：V2.0.7 用户真机三组一分钟提醒测试：
+- 正常退出、亮屏：原生广播到达，较计划时间延迟 77 秒，但通知及震动执行。
+- 正常退出、息屏：原生广播未及时送达，重新打开 App 可能触发延迟投递。
+- 划掉最近任务：亮屏或息屏均不触发，重新进入 App 后也不补发一次性测试。
+- 精确闹钟、通知、高重要性通知渠道和震动已开启；`PowerManager.isIgnoringBatteryOptimizations` 为 false；`ActivityManager.isBackgroundRestricted` 为 false。前者不是故障的唯一证明，后者也不是厂商后台策略全开的证明。
+
+本版不再更换 `setAlarmClock` 投递入口和保活策略。新增标准 Android 的用户主动授权入口：
+- 声明 `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`（仅为了发起由用户决定的系统豁免授权），原生 `ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` 包含 `package:` URI；系统不支持该页面时回退到电池优化列表或研伴应用信息页。
+- 设置页在「随访提醒」下面增加清晰可见的「后台运行授权」，根据电池优化豁免状态展示操作。用户点击并二次确认后才打开系统授权页，不自动申请。
+- 增加标准 Android `ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS` 和 `ACTION_APPLICATION_DETAILS_SETTINGS` 跳转；不指定任何厂商组件，也不修改其他应用设置。
+- 诊断增加自身 `UsageStatsManager.appStandbyBucket`，并修正“通知、精确闹钟均允许即可完全可靠”的误导状态。系统界面返回后重新读取所有授权状态。
+- 不绕过明确的「强行停止」。不保證所有 OEM 对设置批准后有一致的后台调度行为，不以系统豁免取代基于 AlarmManager 的本地原生提醒。
+- 该权限仅应在提醒为核心且 Doze/App Standby 确实严重影响投递的使用场景下申请；若将来通过 Google Play 分发，应重新审核政策允许的直接豁免用途和用户告知。
+

@@ -71,6 +71,9 @@ import {
   getReminderDiagnostics,
   openAppNotificationSettings,
   openNotificationChannelSettings,
+  requestBatteryOptimizationExemption,
+  openBatteryOptimizationSettings,
+  openAppBatterySettings,
   refreshLocalReminders,
   requestExactAlarmPermission,
   requestNotificationPermission,
@@ -1922,9 +1925,34 @@ function SettingsPage({ onRefresh }: Props) {
   };
   const openBackgroundSettings = async () => {
     try {
-      await Linking.openSettings();
+      await openAppBatterySettings();
     } catch (error) {
       Alert.alert('无法打开系统设置', error instanceof Error ? error.message : '请在手机设置中找到研伴的电池或后台运行设置。');
+    }
+  };
+  const requestReliableBackground = () => {
+    Alert.alert(
+      '申请后台提醒运行授权',
+      '通知和精确闹钟权限均已开启，但系统电池优化可能使息屏提醒延迟。你可以自愿允许系统不优化研伴，以改善重要随访提醒的后台送达；并不能保证永久保活。',
+      [
+        { text: '暂不', style: 'cancel' },
+        {
+          text: '打开系统授权',
+          onPress: () => void requestBatteryOptimizationExemption().catch((error) =>
+            Alert.alert('无法打开授权页面', error instanceof Error ? error.message : '请使用下方「系统电池优化列表」手动调整。')),
+        },
+      ],
+    );
+  };
+  const standbyBucketLabel = (bucket?: number) => {
+    switch (bucket) {
+      case 10: return '活跃';
+      case 20: return '工作集';
+      case 30: return '频繁';
+      case 40: return '罕用';
+      case 45: return '受限';
+      case 50: return '从未使用';
+      default: return '未提供';
     }
   };
   const reminderReady = notificationGranted && exactAlarmGranted && (
@@ -1960,13 +1988,16 @@ function SettingsPage({ onRefresh }: Props) {
               <Text style={styles.cardHeading}>随访提醒</Text>
               <Text style={styles.settingsSubtitle}>系统通知与定时提醒</Text>
             </View>
-            <View style={[styles.reminderStatusDot, { backgroundColor: reminderReady ? theme.success : theme.accent }]} />
+            <View style={[styles.reminderStatusDot, { backgroundColor: reminderReady && (Platform.OS !== 'android' || Boolean(reminderDiagnostics?.batteryOptimizationExempt)) ? theme.success : theme.accent }]} />
           </View>
           <Text style={[styles.reminderReadinessText, { marginTop: 12 }]}>
-            {reminderReady ? '提醒基础设置正常' : '有待完成的系统设置'}
+            {!reminderReady ? '基础提醒权限尚未配置完整'
+              : Platform.OS === 'android' && !reminderDiagnostics?.batteryOptimizationExempt
+                ? '提醒权限已开启 · 仍存在电池后台限制风险'
+                : '基础提醒权限已开启'}
           </Text>
           <Text style={styles.helperText}>
-            每日按计划提醒待办；若设备存在后台限制，会引导你完成必要设置。
+            每日提醒使用系统闹钟。通知和精确闹钟授权不等于息屏后台一定能投递；请检查下方后台运行授权。
           </Text>
           <View style={{ height: 14 }} />
           <PrimaryButton
@@ -1975,6 +2006,39 @@ function SettingsPage({ onRefresh }: Props) {
             disabled={configuringReminders}
             loading={configuringReminders}
           />
+
+          {Platform.OS === 'android' ? (
+            <View style={{ marginTop: 12, marginBottom: 8 }}>
+              <Text style={styles.cardHeading}>后台运行授权</Text>
+              <Text style={styles.helperText}>
+                电池优化豁免：{reminderDiagnostics?.batteryOptimizationExempt ? '已授权' : '未授权'}
+                {' · '}系统后台限制：{reminderDiagnostics?.backgroundRestricted ? '受限' : '未报告限制'}
+              </Text>
+              {!reminderDiagnostics?.batteryOptimizationExempt ? (
+                <>
+                  <Text style={styles.helperText}>
+                    目前息屏后曾出现延迟提醒。可在这里主动向 Android 申请电池优化豁免，授权与否由你决定。
+                  </Text>
+                  <View style={{ height: 8 }} />
+                  <PrimaryButton title="申请后台提醒运行授权" onPress={requestReliableBackground} />
+                </>
+              ) : (
+                <Text style={styles.helperText}>Android 电池优化豁免已获得；仍可能受到厂商后台及强行停止策略影响。</Text>
+              )}
+              <View style={{ height: 8 }} />
+              <PrimaryButton
+                title="系统电池优化列表"
+                secondary
+                onPress={() => void openBatteryOptimizationSettings().catch((error) =>
+                  Alert.alert('无法打开电池优化设置', error instanceof Error ? error.message : '请在手机设置中进入电池管理。'))}
+              />
+              <View style={{ height: 8 }} />
+              <PrimaryButton title="研伴应用后台设置" secondary onPress={() => void openBackgroundSettings()} />
+              <Text style={styles.helperText}>
+                均使用 Android 标准系统入口，不会静默修改授权；强行停止后仍无法保证本地提醒。
+              </Text>
+            </View>
+          ) : null}
           {Platform.OS === 'android' ? (
             <View style={{ marginTop: 14, marginBottom: 6 }}>
               <View style={styles.taskTop}>
@@ -2051,7 +2115,8 @@ function SettingsPage({ onRefresh }: Props) {
                     通知级别：{reminderDiagnostics ? reminderDiagnostics.highImportance ? '高' : '需调整' : '未读取'}
                     {' · '}震动：{reminderDiagnostics ? reminderDiagnostics.vibrationEnabled ? '已开启' : '未开启' : '未读取'}
                   </Text>
-                  <Text style={styles.helperText}>后台限制：{reminderDiagnostics ? reminderDiagnostics.backgroundRestricted ? '系统已限制' : '未报告限制' : '未知'} · 电池优化豁免：{reminderDiagnostics?.batteryOptimizationExempt ? '已获得' : '未获得（可能受厂商优化影响）'}</Text>
+                  <Text style={styles.helperText}>后台限制：{reminderDiagnostics ? reminderDiagnostics.backgroundRestricted ? '系统已限制' : '未报告限制' : '未知'} · 电池优化豁免：{reminderDiagnostics?.batteryOptimizationExempt ? '已获得' : '未获得'}</Text>
+                  <Text style={styles.helperText}>Android 待机分组：{standbyBucketLabel(reminderDiagnostics?.appStandbyBucket)}（厂商后台策略可能不同）</Text>
                   <Text style={styles.helperText}>系统通知：{reminderDiagnostics?.notificationsEnabled ? '允许' : '受限'} · 通道重要级别：{reminderDiagnostics?.channelImportance ?? '未知'}（横幅需要至少 4）</Text>
                 </>
               ) : null}
@@ -2168,7 +2233,7 @@ function SettingsPage({ onRefresh }: Props) {
           expanded={aboutDetailsOpen}
           onToggle={() => setAboutDetailsOpen((value) => !value)}
         >
-          <InfoLine label="应用版本" value="2.0.7-preview" />
+          <InfoLine label="应用版本" value="2.0.8-preview" />
           <InfoLine label="研究方案" value={STUDY_PROTOCOL_VERSION} />
           <Text style={styles.helperText}>AI 用于辅助预筛。正式入组仍需要授权人员人工核实。</Text>
         </SettingsDisclosure>

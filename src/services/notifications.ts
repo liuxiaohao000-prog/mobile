@@ -26,6 +26,7 @@ export type ReminderDiagnostics = {
   testReceiverReceivedAt: number;
   testServiceEnteredAt: number;
   batteryOptimizationExempt: boolean;
+  appStandbyBucket: number;
   testVibrationStartedAt: number;
   testError: string;
 };
@@ -38,6 +39,9 @@ const followupReminderModule = NativeModules.FollowupReminder as
       scheduleTestNotificationInOneMinute: () => Promise<boolean>;
       openNotificationChannelSettings: () => Promise<boolean>;
       openAppNotificationSettings: () => Promise<boolean>;
+      requestBatteryOptimizationExemption: () => Promise<boolean>;
+      openBatteryOptimizationSettings: () => Promise<boolean>;
+      openAppBatterySettings: () => Promise<boolean>;
     }
   | undefined;
 
@@ -66,6 +70,27 @@ export async function configureNotifications(): Promise<void> {
 export async function getReminderDiagnostics(): Promise<ReminderDiagnostics | null> {
   if (Platform.OS !== 'android' || !followupReminderModule) return null;
   return followupReminderModule.getReminderDiagnostics();
+}
+
+export async function requestBatteryOptimizationExemption(): Promise<boolean> {
+  if (Platform.OS !== 'android' || !followupReminderModule) {
+    throw new Error('该授权入口只适用于 Android 原生版。');
+  }
+  return followupReminderModule.requestBatteryOptimizationExemption();
+}
+
+export async function openBatteryOptimizationSettings(): Promise<void> {
+  if (Platform.OS !== 'android' || !followupReminderModule) {
+    throw new Error('仅 Android 原生版支持系统电池优化设置。');
+  }
+  await followupReminderModule.openBatteryOptimizationSettings();
+}
+
+export async function openAppBatterySettings(): Promise<void> {
+  if (Platform.OS !== 'android' || !followupReminderModule) {
+    throw new Error('仅 Android 原生版支持应用设置。');
+  }
+  await followupReminderModule.openAppBatterySettings();
 }
 
 export async function requestNotificationPermission(): Promise<boolean> {

@@ -11,6 +11,7 @@ import android.content.Intent
 import android.media.AudioAttributes
 import android.media.RingtoneManager
 import android.net.Uri
+import android.app.usage.UsageStatsManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -121,10 +122,91 @@ class FollowupReminderModule(
         putDouble("channelImportance", (channel?.importance ?: 0).toDouble())
         putBoolean("batteryOptimizationExempt", (reactContext.getSystemService(Context.POWER_SERVICE) as PowerManager)
           .isIgnoringBatteryOptimizations(reactContext.packageName))
+        // Bucket is an OS-level hint, not proof of OEM-specific process policy.
+        putInt("appStandbyBucket", if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P)
+          (reactContext.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager)
+            .appStandbyBucket else -1)
       }
       promise.resolve(result)
     } catch (error: Throwable) {
       promise.reject("FOLLOWUP_DIAGNOSTICS_FAILED", error.message ?: "无法读取提醒状态。", error)
+    }
+  }
+
+  /**
+   * User-initiated power-management opt-in. This is NOT a silent permission,
+   * a guarantee of delivery, or an automatic request on launch.
+   * Start the standard Android approval screen for the exact package.
+   */
+  @ReactMethod
+  fun requestBatteryOptimizationExemption(promise: Promise) {
+    try {
+      if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+        promise.resolve(true)
+        return
+      }
+      val power = reactContext.getSystemService(Context.POWER_SERVICE) as PowerManager
+      if (power.isIgnoringBatteryOptimizations(reactContext.packageName)) {
+        promise.resolve(true)
+        return
+      }
+      val request = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+        data = Uri.parse("package:${reactContext.packageName}")
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      }
+      try {
+        reactContext.startActivity(request)
+      } catch (error: Throwable) {
+        // Some Android distributions omit the direct approval screen.
+        Log.w("FollowupReminder", "Direct battery-exemption dialog unavailable", error)
+        val settings = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS).apply {
+          addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        try {
+          reactContext.startActivity(settings)
+        } catch (_: Throwable) {
+          reactContext.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+            data = Uri.parse("package:${reactContext.packageName}")
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+          })
+        }
+      }
+      promise.resolve(false) // Approval is asynchronous; re-read on app resume.
+    } catch (error: Throwable) {
+      promise.reject("FOLLOWUP_BATTERY_EXEMPTION_FAILED", error.message ?: "无法打开电池优化授权界面", error)
+    }
+  }
+
+  @ReactMethod
+  fun openBatteryOptimizationSettings(promise: Promise) {
+    try {
+      val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS).apply {
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      }
+      try {
+        reactContext.startActivity(intent)
+      } catch (_: Throwable) {
+        reactContext.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+          data = Uri.parse("package:${reactContext.packageName}")
+          addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        })
+      }
+      promise.resolve(true)
+    } catch (error: Throwable) {
+      promise.reject("FOLLOWUP_BATTERY_SETTINGS_FAILED", error.message ?: "无法打开电池管理设置", error)
+    }
+  }
+
+  @ReactMethod
+  fun openAppBatterySettings(promise: Promise) {
+    try {
+      reactContext.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+        data = Uri.parse("package:${reactContext.packageName}")
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      })
+      promise.resolve(true)
+    } catch (error: Throwable) {
+      promise.reject("FOLLOWUP_APP_SETTINGS_FAILED", error.message ?: "无法打开研伴应用设置", error)
     }
   }
 
