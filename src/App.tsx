@@ -502,7 +502,7 @@ function HomePage({
         </View>
       </View>
 
-      <SectionHeading title="优先处理" action="查看全部随访" onPress={() => onOpen({ kind: 'tab' })} />
+      <SectionHeading title="优先处理" />
       {todayTasks.length === 0 ? (
         <EmptyState title="今天没有到期待办" subtitle="已安排的随访会按计划时间出现在这里。" />
       ) : (
