@@ -12,6 +12,13 @@ import android.media.AudioAttributes
 import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.os.PowerManager
+import android.os.VibrationAttributes
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import android.provider.Settings
 import android.util.Log
 import androidx.core.app.AlarmManagerCompat
@@ -37,6 +44,7 @@ internal const val KEY_TEST_TRIGGERED_AT = "test_triggered_at"
 internal const val KEY_TEST_NOTIFIED_AT = "test_notified_at"
 internal const val KEY_TEST_VIBRATION_AT = "test_vibration_at"
 internal const val KEY_TEST_ERROR = "test_error"
+internal const val KEY_TEST_RECEIVED_AT = "test_receiver_received_at"
 internal const val ACTION_FOLLOWUP_ALARM = "com.local.patientfollowup.FOLLOWUP_ALARM"
 internal const val ACTION_TEST_ALARM = "com.local.patientfollowup.TEST_ALARM"
 internal const val FOLLOWUP_CHANNEL_ID = "followup-reminders-v4"
@@ -86,9 +94,12 @@ class FollowupReminderModule(
         putBoolean("exactAlarmAllowed", Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
           (reactContext.getSystemService(Context.ALARM_SERVICE) as AlarmManager).canScheduleExactAlarms())
         putDouble("testNotificationPostedAt", preferences.getLong(KEY_TEST_NOTIFIED_AT, 0L).toDouble())
+        putDouble("testReceiverReceivedAt", preferences.getLong(KEY_TEST_RECEIVED_AT, 0L).toDouble())
         putDouble("testVibrationStartedAt", preferences.getLong(KEY_TEST_VIBRATION_AT, 0L).toDouble())
         putString("testError", preferences.getString(KEY_TEST_ERROR, "") ?: "")
         putDouble("channelImportance", (channel?.importance ?: 0).toDouble())
+        putBoolean("batteryOptimizationExempt", (reactContext.getSystemService(Context.POWER_SERVICE) as PowerManager)
+          .isIgnoringBatteryOptimizations(reactContext.packageName))
       }
       promise.resolve(result)
     } catch (error: Throwable) {
@@ -168,8 +179,25 @@ class FollowupReminderReceiver : BroadcastReceiver() {
     val finish = { if (finished.compareAndSet(false, true)) pending.finish() }
     try {
       when (action) {
-        ACTION_TEST_ALARM -> LocalFollowupAlarm.deliverTestReminder(context, finish)
-        ACTION_FOLLOWUP_ALARM -> LocalFollowupAlarm.deliverAndContinue(context, finish)
+        ACTION_TEST_ALARM -> {
+          // A short broadcast is the primary OS alarm target: post the notification
+          // BEFORE doing any optional haptic work, avoiding all-or-nothing FGS delivery.
+          val scheduled = context.getSharedPreferences(REMINDER_PREFS, Context.MODE_PRIVATE)
+            .getLong(KEY_TEST_SCHEDULED_AT, 0L)
+          val received = System.currentTimeMillis()
+          context.getSharedPreferences(REMINDER_PREFS, Context.MODE_PRIVATE).edit()
+            .putLong(KEY_TEST_RECEIVED_AT, received).commit()
+          Log.i("FollowupReminder", "Test alarm receiver entered; latenessMs=" +
+            (if (scheduled > 0L) (received - scheduled) else -1L))
+          val shouldVibrate = LocalFollowupAlarm.deliverTestReminder(context, {}, inService = true)
+          if (shouldVibrate) LocalFollowupAlarm.playReceiverHaptics(context, true, finish)
+          else finish()
+        }
+        ACTION_FOLLOWUP_ALARM -> {
+          val shouldVibrate = LocalFollowupAlarm.deliverAndContinue(context, {}, inService = true)
+          if (shouldVibrate) LocalFollowupAlarm.playReceiverHaptics(context, false, finish)
+          else finish()
+        }
         // Reboot, timezone changes and package updates must only re-arm the
         // next alarm. They must not create a surprise notification at 2 AM.
         else -> {
@@ -202,19 +230,28 @@ internal object LocalFollowupAlarm {
     scheduleFromSavedState(context)
   }
 
-  fun deliverAndContinue(context: Context, onFinished: () -> Unit, inService: Boolean = false) {
+  fun deliverAndContinue(context: Context, onFinished: () -> Unit, inService: Boolean = false): Boolean {
     val earliestOpenDate = context.getSharedPreferences(REMINDER_PREFS, Context.MODE_PRIVATE)
       .getString(KEY_EARLIEST_OPEN_DATE, null)
-      ?: run { onFinished(); return }
+      ?: run { onFinished(); return false }
     val dueDate = LocalDate.parse(earliestOpenDate)
     val today = LocalDate.now()
     val reminderTimePassed = !java.time.LocalTime.now().isBefore(java.time.LocalTime.of(9, 0))
-    scheduleFromSavedState(context)
-    if (dueDate.isBefore(today) || (dueDate == today && reminderTimePassed)) {
-      postReminder(context, onFinished, inService)
-    } else {
+    var vibrationAllowed = false
+    try {
+      if (dueDate.isBefore(today) || (dueDate == today && reminderTimePassed)) {
+        // Do not lose today's notification if scheduling tomorrow's alarm fails.
+        vibrationAllowed = postReminder(context, {}, inService)
+      }
+    } finally {
+      try {
+        scheduleFromSavedState(context)
+      } catch (error: Throwable) {
+        Log.e("FollowupReminder", "Could not schedule next day reminder", error)
+      }
       onFinished()
     }
+    return vibrationAllowed
   }
 
   fun scheduleFromSavedState(context: Context) {
@@ -258,7 +295,7 @@ internal object LocalFollowupAlarm {
           PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
       }
-      alarmManager.setAlarmClock(AlarmManager.AlarmClockInfo(triggerAtMillis, showIntent), foregroundOperation)
+      alarmManager.setAlarmClock(AlarmManager.AlarmClockInfo(triggerAtMillis, showIntent), receiverOperation)
     } else {
       AlarmManagerCompat.setAndAllowWhileIdle(alarmManager, AlarmManager.RTC_WAKEUP, triggerAtMillis, receiverOperation)
     }
@@ -273,9 +310,9 @@ internal object LocalFollowupAlarm {
     else PendingIntent.getBroadcast(context, ALARM_REQUEST_CODE, intent, flags)
   }
 
-  private fun postReminder(context: Context, onFinished: () -> Unit, inService: Boolean = false) {
+  private fun postReminder(context: Context, onFinished: () -> Unit, inService: Boolean = false): Boolean {
     // Production and test reminders use the same notification and vibration path.
-    postNotification(
+    return postNotification(
       context,
       NOTIFICATION_ID,
       "患者随访提醒",
@@ -294,17 +331,17 @@ internal object LocalFollowupAlarm {
     inService,
   )
 
-  fun deliverTestReminder(context: Context, onFinished: () -> Unit, inService: Boolean = false) {
+  fun deliverTestReminder(context: Context, onFinished: () -> Unit, inService: Boolean = false): Boolean {
     context.getSharedPreferences(REMINDER_PREFS, Context.MODE_PRIVATE)
       .edit().putLong(KEY_TEST_TRIGGERED_AT, System.currentTimeMillis()).commit()
-    postTestReminder(context, onFinished, inService)
+    return postTestReminder(context, onFinished, inService)
   }
 
   fun scheduleTestReminder(context: Context): Boolean {
     ensureNotificationChannel(context)
     val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-    val operation = testAlarmPendingIntent(context, true)
-    val legacyOperation = testAlarmPendingIntent(context, false)
+    val operation = testAlarmPendingIntent(context, false)
+    val legacyOperation = testAlarmPendingIntent(context, true)
     alarmManager.cancel(operation)
     alarmManager.cancel(legacyOperation)
     val exactAlarmAllowed = Build.VERSION.SDK_INT < Build.VERSION_CODES.S || alarmManager.canScheduleExactAlarms()
@@ -326,6 +363,7 @@ internal object LocalFollowupAlarm {
     context.getSharedPreferences(REMINDER_PREFS, Context.MODE_PRIVATE).edit()
       .putLong(KEY_TEST_SCHEDULED_AT, triggerAtMillis)
       .remove(KEY_TEST_TRIGGERED_AT)
+      .remove(KEY_TEST_RECEIVED_AT)
       .remove(KEY_TEST_NOTIFIED_AT)
       .remove(KEY_TEST_VIBRATION_AT)
       .remove(KEY_TEST_ERROR)
@@ -410,6 +448,61 @@ internal object LocalFollowupAlarm {
     }
     onFinished?.invoke()
     return vibrationEnabled
+  }
+
+  /**
+   * Called directly inside the alarm BroadcastReceiver, after publishing the
+   * high-importance notification. Native one-shot haptics are handed to the
+   * Android vibrator service and do not depend on creating a foreground service.
+   * Keep a bounded async receiver and CPU wake lock while the haptic finishes.
+   */
+  fun playReceiverHaptics(context: Context, isTest: Boolean, onFinished: () -> Unit) {
+    val prefs = context.getSharedPreferences(REMINDER_PREFS, Context.MODE_PRIVATE)
+    var wakeLock: PowerManager.WakeLock? = null
+    try {
+      val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        (context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager).defaultVibrator
+      } else {
+        @Suppress("DEPRECATION")
+        (context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator)
+      }
+      if (!vibrator.hasVibrator()) {
+        if (isTest) prefs.edit().putString(KEY_TEST_ERROR, "该手机没有可用震动马达").apply()
+        onFinished()
+        return
+      }
+      val power = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+      wakeLock = power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Yanban:ReceiverHaptics").apply {
+        acquire(7_000L)
+      }
+      val effect = VibrationEffect.createWaveform(
+        longArrayOf(0, 900, 125, 900, 125, 900, 125, 900, 125, 1_000), -1)
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        vibrator.vibrate(effect, VibrationAttributes.createForUsage(VibrationAttributes.USAGE_ALARM))
+      } else {
+        vibrator.vibrate(effect, AudioAttributes.Builder()
+          .setUsage(AudioAttributes.USAGE_ALARM).build())
+      }
+      if (isTest) {
+        prefs.edit().putLong(KEY_TEST_VIBRATION_AT, System.currentTimeMillis())
+          .remove(KEY_TEST_ERROR).apply()
+      }
+      val held = wakeLock ?: throw IllegalStateException("WakeLock creation failed")
+      Handler(Looper.getMainLooper()).postDelayed({
+        try {
+          if (held.isHeld) held.release()
+        } finally {
+          onFinished()
+        }
+      }, 5_200L)
+    } catch (error: Throwable) {
+      Log.e("FollowupReminder", "Could not play receiver vibration", error)
+      if (isTest) prefs.edit()
+        .putString(KEY_TEST_ERROR, (error.javaClass.simpleName + ": " + (error.message ?: "震动失败")).take(220))
+        .apply()
+      try { wakeLock?.let { if (it.isHeld) it.release() } } catch (_: Throwable) {}
+      onFinished()
+    }
   }
 
   private fun testAlarmPendingIntent(context: Context, foreground: Boolean): PendingIntent {

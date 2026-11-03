@@ -1960,24 +1960,40 @@ function SettingsPage({ onRefresh }: Props) {
                     通知级别：{reminderDiagnostics ? reminderDiagnostics.highImportance ? '高' : '需调整' : '未读取'}
                     {' · '}震动：{reminderDiagnostics ? reminderDiagnostics.vibrationEnabled ? '已开启' : '未开启' : '未读取'}
                   </Text>
-                  <Text style={styles.helperText}>后台限制：{reminderDiagnostics ? reminderDiagnostics.backgroundRestricted ? '系统已限制' : '未报告限制' : '未知'}</Text>
+                  <Text style={styles.helperText}>后台限制：{reminderDiagnostics ? reminderDiagnostics.backgroundRestricted ? '系统已限制' : '未报告限制' : '未知'} · 电池优化豁免：{reminderDiagnostics?.batteryOptimizationExempt ? '已获得' : '未获得（可能受厂商优化影响）'}</Text>
                   <Text style={styles.helperText}>系统通知：{reminderDiagnostics?.notificationsEnabled ? '允许' : '受限'} · 通道重要级别：{reminderDiagnostics?.channelImportance ?? '未知'}（横幅需要至少 4）</Text>
                 </>
               ) : null}
               {reminderDiagnostics && reminderDiagnostics.testScheduledAt > 0 ? (
                 <Text style={styles.helperText}>
-                  上次延迟测试：{reminderDiagnostics.testTriggeredAt > 0
-                    ? '闹钟已触发'
-                    : '等待闹钟触发'}
+                  上次延迟测试：{reminderDiagnostics.testReceiverReceivedAt > 0
+                    ? '系统已投递广播'
+                    : '尚未收到系统广播'}
                   {' · '}通知：{reminderDiagnostics.testNotificationPostedAt > 0 ? '已发布' : '未确认'}
                   {' · '}震动：{reminderDiagnostics.testVibrationStartedAt > 0 ? '已发起' : '未确认'}
                 </Text>
+              ) : null}
+              {reminderDiagnostics && reminderDiagnostics.testScheduledAt > 0 ? (
+                <>
+                  <Text style={styles.helperText}>计划触发：{new Date(reminderDiagnostics.testScheduledAt).toLocaleString('zh-CN', { hour12: false })}</Text>
+                  {reminderDiagnostics.testReceiverReceivedAt > 0 ? (
+                    <Text style={styles.helperText}>
+                      实际广播：{new Date(reminderDiagnostics.testReceiverReceivedAt).toLocaleString('zh-CN', { hour12: false })}
+                      {' · '}较计划延迟 {Math.max(0, Math.round((reminderDiagnostics.testReceiverReceivedAt - reminderDiagnostics.testScheduledAt) / 1000))} 秒
+                    </Text>
+                  ) : (
+                    <Text style={styles.helperText}>尚无广播记录；若已超过计划时间，说明系统未按计划投递给 App，或 App 被系统强行停止。</Text>
+                  )}
+                  {reminderDiagnostics.testTriggeredAt > 0 && reminderDiagnostics.testReceiverReceivedAt === 0 ? (
+                    <Text style={styles.helperText}>检测到旧版前台服务触发记录，但没有广播入口记录。</Text>
+                  ) : null}
+                </>
               ) : null}
               {reminderDiagnostics?.testError ? (
                 <Text style={[styles.helperText, { color: theme.danger }]}>上次测试错误：{reminderDiagnostics.testError}</Text>
               ) : null}
               {testFeedback ? <Text style={styles.helperText}>{testFeedback}</Text> : null}
-              <Text style={styles.helperText}>测试方式：安排后返回桌面或划掉最近任务，约一分钟后应显示横幅并震动 5 秒；不要在系统设置中强行停止应用。</Text>
+              <Text style={styles.helperText}>测试方式：安排后返回桌面或锁屏；可测试划掉最近任务，但部分一加系统会将此操作视作强行停止。约一分钟后应显示横幅并震动 5 秒。</Text>
               <View style={{ height: 12 }} />
               <PrimaryButton title="立即测试通知（震动 5 秒）" onPress={() => void testNotification(false)} secondary disabled={!notificationGranted} />
               <View style={{ height: 8 }} />
@@ -2042,7 +2058,7 @@ function SettingsPage({ onRefresh }: Props) {
           expanded={aboutDetailsOpen}
           onToggle={() => setAboutDetailsOpen((value) => !value)}
         >
-          <InfoLine label="应用版本" value="2.0.1-preview" />
+          <InfoLine label="应用版本" value="2.0.2-preview" />
           <InfoLine label="研究方案" value={STUDY_PROTOCOL_VERSION} />
           <Text style={styles.helperText}>AI 用于辅助预筛。正式入组仍需要授权人员人工核实。</Text>
         </SettingsDisclosure>

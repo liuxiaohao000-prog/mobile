@@ -17,6 +17,8 @@ export type ReminderDiagnostics = {
   exactAlarmAllowed: boolean;
   channelImportance: number;
   testNotificationPostedAt: number;
+  testReceiverReceivedAt: number;
+  batteryOptimizationExempt: boolean;
   testVibrationStartedAt: number;
   testError: string;
 };
