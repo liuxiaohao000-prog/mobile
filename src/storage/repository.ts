@@ -726,6 +726,71 @@ export async function getPatient(patientId: string): Promise<Patient | undefined
   return row ? mapPatient(row) : undefined;
 }
 
+/**
+ * Patient-level actionable follow-ups for the foreground-only daily briefing.
+ * Never send names/phone numbers to Android's background notification service.
+ * Match HomePage's DUE/OVERDUE criteria while doing the filtering in SQL.
+ */
+export type DueFollowupContact = {
+  patientId: string;
+  patientName: string;
+  patientNumber: string;
+  phone: string;
+  firstTaskId: string;
+  nodeMonths: number[];
+  dueTodayCount: number;
+  overdueCount: number;
+};
+
+export async function listDueFollowupContacts(today = dateKey(new Date())): Promise<DueFollowupContact[]> {
+  const database = await getDatabase();
+  const rows = await database.getAllAsync<{
+    task_id: string;
+    patient_id: string;
+    patient_name: string;
+    patient_number: string;
+    phone: string;
+    node_month: number;
+    planned_date: string;
+  }>(
+    `SELECT t.id AS task_id, t.patient_id, p.name AS patient_name,
+            p.patient_number, p.phone, t.node_month, t.planned_date
+       FROM followup_task t
+       INNER JOIN patient p ON p.id = t.patient_id
+      WHERE p.status = 'ACTIVE'
+        AND t.status NOT IN ('COMPLETED', 'CANCELLED')
+        AND t.planned_date <= ?
+      ORDER BY CASE WHEN t.planned_date = ? THEN 0 ELSE 1 END,
+               t.planned_date ASC, p.name COLLATE NOCASE`,
+    today, today,
+  );
+
+  const contacts = new Map<string, DueFollowupContact>();
+  for (const row of rows) {
+    let contact = contacts.get(row.patient_id);
+    if (!contact) {
+      contact = {
+        patientId: row.patient_id,
+        patientName: row.patient_name,
+        patientNumber: row.patient_number,
+        phone: row.phone,
+        firstTaskId: row.task_id,
+        nodeMonths: [],
+        dueTodayCount: 0,
+        overdueCount: 0,
+      };
+      contacts.set(row.patient_id, contact);
+    }
+    if (!contact.nodeMonths.includes(row.node_month)) contact.nodeMonths.push(row.node_month);
+    if (row.planned_date === today) contact.dueTodayCount += 1;
+    else contact.overdueCount += 1;
+  }
+  return Array.from(contacts.values()).sort((a, b) => {
+    if ((a.dueTodayCount > 0) !== (b.dueTodayCount > 0)) return a.dueTodayCount > 0 ? -1 : 1;
+    return a.patientName.localeCompare(b.patientName, 'zh-CN');
+  });
+}
+
 export async function getTasks(): Promise<FollowupTask[]> {
   const database = await getDatabase();
   const rows = await database.getAllAsync<{

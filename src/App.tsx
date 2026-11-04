@@ -7,6 +7,7 @@ import {
   Image,
   KeyboardAvoidingView,
   Linking,
+  Modal,
   Platform,
   Pressable,
   SafeAreaView,
@@ -37,6 +38,7 @@ import {
   getLatestQualificationVerification,
   getScreening,
   getTasks,
+  listDueFollowupContacts,
   listFollowupRecords,
   listAnalysisHistory,
   listPatientTasks,
@@ -49,6 +51,7 @@ import {
   acknowledgeMissingInformation,
   skipAiAnalysis,
   DuplicatePatientError,
+  type DueFollowupContact,
 } from './storage/repository';
 import {
   bytesToBase64,
@@ -459,6 +462,135 @@ function EmptyState({ title, subtitle }: { title: string; subtitle: string }) {
       <Text style={styles.emptyTitle}>{title}</Text>
       <Text style={styles.emptySubtitle}>{subtitle}</Text>
     </Card>
+  );
+}
+
+/**
+ * Patient details stay inside the unlocked, foreground React Native app.
+ * The ongoing Android monitor receives aggregate counts only, never names or
+ * phone numbers. Modal is deliberately not a system-level notification.
+ */
+function TodayFollowupDialog({
+  visible,
+  contacts,
+  onClose,
+  onDial,
+  onOpenTask,
+}: {
+  visible: boolean;
+  contacts: DueFollowupContact[];
+  onClose: () => void;
+  onDial: (phone: string) => void;
+  onOpenTask: (taskId: string) => void;
+}) {
+  const todayCount = contacts.filter((contact) => contact.dueTodayCount > 0).length;
+  const overdueCount = contacts.filter((contact) => contact.overdueCount > 0).length;
+  return (
+    <Modal
+      visible={visible}
+      animationType="fade"
+      transparent
+      onRequestClose={onClose}
+      statusBarTranslucent
+    >
+      <View style={styles.briefingOverlay}>
+        <Pressable
+          accessibilityLabel="关闭今日随访清单"
+          accessibilityRole="button"
+          style={StyleSheet.absoluteFill}
+          onPress={onClose}
+        />
+        <View style={styles.briefingPanel}>
+          <View style={styles.briefingTop}>
+            <View style={styles.briefingHeaderText}>
+              <Text style={styles.briefingEyebrow}>
+                {new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' })}
+              </Text>
+              <Text style={styles.briefingTitle}>今日随访速览</Text>
+              <Text style={styles.briefingSubtitle}>
+                {contacts.length > 0
+                  ? contacts.length + ' 位患者待联系 · 今日到期 ' + todayCount + ' 位 · 含逾期 ' + overdueCount + ' 位'
+                  : '今天暂无需要联系的患者'}
+              </Text>
+            </View>
+            <Pressable
+              style={styles.briefingClose}
+              accessibilityRole="button"
+              accessibilityLabel="关闭弹窗"
+              onPress={onClose}
+            >
+              <Text style={styles.briefingCloseText}>×</Text>
+            </Pressable>
+          </View>
+          {contacts.length === 0 ? (
+            <View style={styles.briefingEmpty}>
+              <Text style={styles.briefingEmptyIcon}>✓</Text>
+              <Text style={styles.briefingEmptyTitle}>今日待办已清空</Text>
+              <Text style={styles.briefingEmptyCaption}>有新的到期随访时会自动显示在这里。</Text>
+            </View>
+          ) : (
+            <ScrollView
+              style={styles.briefingList}
+              contentContainerStyle={styles.briefingListContent}
+              showsVerticalScrollIndicator={contacts.length > 4}
+            >
+              {contacts.map((contact) => (
+                <View key={contact.patientId} style={styles.briefingContact}>
+                  <View style={styles.briefingContactMain}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.briefingPatientName} numberOfLines={1}>
+                        {contact.patientName || '姓名未填写'}
+                      </Text>
+                      <Text style={styles.briefingPatientMeta} numberOfLines={2}>
+                        {contact.patientNumber + ' · ' + contact.nodeMonths.map((month) => '第' + month + '月').join(' / ')}
+                      </Text>
+                    </View>
+                    <Text
+                      style={[
+                        styles.briefingStatus,
+                        contact.dueTodayCount === 0 && styles.briefingStatusOverdue,
+                      ]}
+                    >
+                      {contact.dueTodayCount > 0
+                        ? contact.overdueCount > 0 ? '今日到期·含逾期' : '今日到期'
+                        : '已逾期'}
+                    </Text>
+                  </View>
+                  <View style={styles.briefingContactActions}>
+                    {contact.phone.trim() ? (
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={'打开拨号盘：' + contact.patientName + '，' + contact.phone}
+                        onPress={() => onDial(contact.phone)}
+                        style={styles.briefingDialButton}
+                      >
+                        <Text style={styles.briefingDialText} numberOfLines={1}>☎  {contact.phone}</Text>
+                        <Text style={styles.briefingDialArrow}>›</Text>
+                      </Pressable>
+                    ) : (
+                      <Text style={styles.briefingNoPhone}>未登记联系电话</Text>
+                    )}
+                    <Pressable
+                      accessibilityRole="button"
+                      onPress={() => onOpenTask(contact.firstTaskId)}
+                      style={styles.briefingTaskLink}
+                    >
+                      <Text style={styles.briefingTaskLinkText}>查看任务</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              ))}
+            </ScrollView>
+          )}
+          <View style={styles.briefingFooter}>
+            <Text style={styles.briefingPrivacy}>仅在 App 内显示患者信息 · 拨号前由你确认</Text>
+            <Pressable accessibilityRole="button" onPress={onClose} style={styles.briefingDone}>
+              <Text style={styles.briefingDoneText}>进入工作台</Text>
+            </Pressable>
+          </View>
+        </View>
+      </View>
+    </Modal>
   );
 }
 
@@ -2315,7 +2447,15 @@ export default function App() {
   const [summary, setSummary] = useState<DashboardSummary>({ activePatients: 0, dueTasks: 0, overdueTasks: 0 });
   const [tasks, setTasks] = useState<FollowupTask[]>([]);
   const [screenings, setScreenings] = useState<Screening[]>([]);
+  const [todayContacts, setTodayContacts] = useState<DueFollowupContact[]>([]);
+  const [briefingVisible, setBriefingVisible] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  // Show on the first unlocked app launch. Re-show on re-entry only if the
+  // app has been away for at least two minutes (never on return from dialer).
+  const briefingPendingRef = useRef(true);
+  const lastBriefingAtRef = useRef(0);
+  const backgroundEnteredAtRef = useRef<number | null>(null);
+  const skipNextResumeBriefingRef = useRef(false);
   const initializationInProgress = useRef(false);
   const initializationComplete = useRef(false);
   const exactAlarmPermissionRef = useRef<boolean | null>(null);
@@ -2323,16 +2463,23 @@ export default function App() {
   const refresh = useCallback(async (forceReminderReschedule = false) => {
     try {
       setRefreshing(true);
-      const [nextSummary, nextTasks, nextScreenings, operator] = await Promise.all([
+      const [nextSummary, nextTasks, nextScreenings, operator, contacts] = await Promise.all([
         getDashboardSummary(),
         getTasks(),
         listScreenings(),
         getOperatorName(),
+        listDueFollowupContacts(),
       ]);
       setSummary(nextSummary);
       setTasks(nextTasks);
       setScreenings(nextScreenings);
       setActor(operator);
+      setTodayContacts(contacts);
+      if (briefingPendingRef.current) {
+        briefingPendingRef.current = false;
+        lastBriefingAtRef.current = Date.now();
+        setBriefingVisible(true);
+      }
       const exactAlarmGranted = await getExactAlarmPermission();
       const permissionChanged = exactAlarmPermissionRef.current !== null
         && exactAlarmPermissionRef.current !== exactAlarmGranted;
@@ -2449,10 +2596,64 @@ export default function App() {
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (state) => {
-      if (state === 'active') void checkBackupAccessAndInitialize();
+      if (state === 'background') {
+        backgroundEnteredAtRef.current = Date.now();
+      }
+      if (state === 'active') {
+        const now = Date.now();
+        const elapsed = backgroundEnteredAtRef.current === null
+          ? 0 : now - backgroundEnteredAtRef.current;
+        backgroundEnteredAtRef.current = null;
+        // A returning call, file picker or short app switch must not trigger
+        // a second interrupting patient list. No patient data is sent outside.
+        if (!skipNextResumeBriefingRef.current &&
+          elapsed >= 120_000 && now - lastBriefingAtRef.current >= 120_000) {
+          briefingPendingRef.current = true;
+        }
+        skipNextResumeBriefingRef.current = false;
+        void checkBackupAccessAndInitialize();
+      }
     });
     return () => subscription.remove();
   }, [checkBackupAccessAndInitialize]);
+
+  const openTodayBriefing = async () => {
+    try {
+      const contacts = await listDueFollowupContacts();
+      setTodayContacts(contacts);
+      briefingPendingRef.current = false;
+      lastBriefingAtRef.current = Date.now();
+      setBriefingVisible(true);
+    } catch (error) {
+      Alert.alert('无法打开今日随访', error instanceof Error ? error.message : '请检查本机患者数据库。');
+    }
+  };
+
+  const openPatientDialer = async (rawPhone: string) => {
+    const cleaned = rawPhone.trim().replace(/[^+0-9]/g, '');
+    const phone = cleaned.startsWith('+')
+      ? '+' + cleaned.slice(1).replace(/\+/g, '')
+      : cleaned.replace(/\+/g, '');
+    // Dialer preview only. Never use ACTION_CALL or request CALL_PHONE.
+    if (phone.replace(/\D/g, '').length < 3) {
+      Alert.alert('电话号码无效', '请先进入患者档案核对联系电话。');
+      return;
+    }
+    setBriefingVisible(false);
+    skipNextResumeBriefingRef.current = true;
+    try {
+      await Linking.openURL('tel:' + phone);
+    } catch (error) {
+      skipNextResumeBriefingRef.current = false;
+      Alert.alert('无法打开拨号界面', error instanceof Error ? error.message : '当前设备没有可用的拨号应用。');
+    }
+  };
+
+  const openBriefingTask = (taskId: string) => {
+    setBriefingVisible(false);
+    setTab('followups');
+    setPage({ kind: 'task', id: taskId });
+  };
 
   const goTab = (next: Tab) => {
     setTab(next);
@@ -2529,14 +2730,86 @@ export default function App() {
           <Text style={styles.brandCaption}>患者入组与随访</Text>
         </View>
         {refreshing ? <ActivityIndicator color={theme.primary} /> : null}
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="打开今日随访患者及电话号码"
+          onPress={() => { void openTodayBriefing(); }}
+          style={styles.briefingHeaderButton}
+        >
+          <Text style={styles.briefingHeaderButtonText}>
+            {'今日随访' + (todayContacts.length > 0 ? ' ' + todayContacts.length : '')}
+          </Text>
+        </Pressable>
       </View>
       <View style={styles.fill}>{content}</View>
       {page.kind === 'tab' ? <TabBar active={tab} onChange={goTab} /> : null}
+      <TodayFollowupDialog
+        visible={briefingVisible}
+        contacts={todayContacts}
+        onClose={() => setBriefingVisible(false)}
+        onDial={(phone) => { void openPatientDialer(phone); }}
+        onOpenTask={openBriefingTask}
+      />
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  briefingOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(16, 32, 39, 0.45)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 22,
+    paddingVertical: 26,
+  },
+  briefingPanel: {
+    width: '100%',
+    maxWidth: 440,
+    maxHeight: '78%',
+    backgroundColor: theme.paper,
+    borderRadius: 22,
+    paddingTop: 20,
+    paddingHorizontal: 18,
+    paddingBottom: 16,
+    shadowColor: '#12282B',
+    shadowOpacity: 0.15,
+    shadowOffset: { width: 0, height: 12 },
+    shadowRadius: 22,
+    elevation: 12,
+  },
+  briefingTop: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginBottom: 10 },
+  briefingHeaderText: { flex: 1 },
+  briefingEyebrow: { fontSize: 12, color: theme.primary, fontWeight: '600' },
+  briefingTitle: { color: theme.ink, fontSize: 21, lineHeight: 28, fontWeight: '700', marginTop: 3 },
+  briefingSubtitle: { color: theme.muted, fontSize: 12, lineHeight: 18, marginTop: 6 },
+  briefingClose: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center', borderRadius: 18, backgroundColor: theme.canvas },
+  briefingCloseText: { fontSize: 25, lineHeight: 29, color: theme.muted, fontWeight: '300' },
+  briefingList: { flexShrink: 1, maxHeight: 420, marginTop: 4 },
+  briefingListContent: { paddingBottom: 2 },
+  briefingContact: { paddingVertical: 12, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.border },
+  briefingContactMain: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
+  briefingPatientName: { color: theme.ink, fontSize: 16, fontWeight: '700' },
+  briefingPatientMeta: { color: theme.muted, fontSize: 12, lineHeight: 18, marginTop: 4 },
+  briefingStatus: { color: theme.primaryDark, backgroundColor: theme.primarySoft, borderRadius: 10, overflow: 'hidden', fontSize: 11, fontWeight: '600', paddingHorizontal: 8, paddingVertical: 4 },
+  briefingStatusOverdue: { color: theme.danger, backgroundColor: theme.dangerSoft },
+  briefingContactActions: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 10, marginTop: 10 },
+  briefingDialButton: { flex: 1, minHeight: 38, borderRadius: 10, backgroundColor: theme.primarySoft, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 4 },
+  briefingDialText: { flexShrink: 1, color: theme.primaryDark, fontWeight: '700', fontSize: 14 },
+  briefingDialArrow: { color: theme.primary, fontSize: 20, fontWeight: '600' },
+  briefingNoPhone: { flex: 1, color: theme.muted, fontSize: 12 },
+  briefingTaskLink: { minHeight: 38, paddingHorizontal: 7, justifyContent: 'center', alignItems: 'center' },
+  briefingTaskLinkText: { color: theme.primary, fontSize: 12, fontWeight: '600' },
+  briefingEmpty: { alignItems: 'center', paddingTop: 28, paddingBottom: 20, gap: 7 },
+  briefingEmptyIcon: { backgroundColor: theme.successSoft, color: theme.success, width: 45, height: 45, borderRadius: 23, textAlign: 'center', textAlignVertical: 'center', overflow: 'hidden', fontSize: 22, fontWeight: '700' },
+  briefingEmptyTitle: { color: theme.ink, fontSize: 15, fontWeight: '700' },
+  briefingEmptyCaption: { color: theme.muted, fontSize: 12, textAlign: 'center' },
+  briefingFooter: { paddingTop: 12, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.border, gap: 12 },
+  briefingPrivacy: { color: theme.muted, fontSize: 11, lineHeight: 16, textAlign: 'center' },
+  briefingDone: { backgroundColor: theme.primary, minHeight: 42, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
+  briefingDoneText: { color: '#FFFFFF', fontSize: 14, fontWeight: '700' },
+  briefingHeaderButton: { minHeight: 34, justifyContent: 'center', alignItems: 'center', backgroundColor: theme.primarySoft, borderRadius: 12, paddingHorizontal: 11, marginLeft: 10 },
+  briefingHeaderButtonText: { color: theme.primaryDark, fontSize: 12, fontWeight: '700' },
   safe: { flex: 1, backgroundColor: theme.canvas, paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight ?? 0) : 0 },
   fill: { flex: 1 },
   appHeader: {
