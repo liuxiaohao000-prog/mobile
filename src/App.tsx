@@ -1647,11 +1647,11 @@ function SettingsPage({ onRefresh }: Props) {
           expanded={aboutDetailsOpen}
           onToggle={() => setAboutDetailsOpen((value) => !value)}
         >
-          <InfoLine label="应用版本" value="2.0.8-preview" />
+          <InfoLine label="应用版本" value="2.0.12-preview" />
           <InfoLine label="研究方案" value={STUDY_PROTOCOL_VERSION} />
-          <Text style={styles.helperText}>AI 用于辅助预筛。正式入组仍需要授权人员人工核实。</Text>
+          <Text style={styles.helperText}>当前使用两步患者信息登记与同意确认。研究资格核查和正式知情同意仍应按研究方案执行。</Text>
         </SettingsDisclosure>
-        <Text style={styles.privacyNote}>数据仅保存在本机，AI 预筛按所配置服务单独发送必要信息。</Text>
+        <Text style={styles.privacyNote}>患者信息保存在本机加密数据库；新入组流程不调用外部 AI 服务。</Text>
       </ScrollView>
     </KeyboardAvoidingView>
   );
