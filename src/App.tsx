@@ -558,7 +558,7 @@ function PatientEntryPage({ onOpen, onBack, onRefresh, actor }: BackProps & { ac
   const [phone, setPhone] = useState('');
   const [age, setAge] = useState('');
   const [gender, setGender] = useState<Gender>('其他');
-  const [groupName, setGroupName] = useState<'用药组' | '不用药组'>('用药组');
+  const [groupName, setGroupName] = useState<'用药组' | '不用药组' | undefined>();
   const [enrollmentAt, setEnrollmentAt] = useState('');
   const [notes, setNotes] = useState('');
   const [busy, setBusy] = useState(false);
@@ -571,6 +571,10 @@ function PatientEntryPage({ onOpen, onBack, onRefresh, actor }: BackProps & { ac
     }
     if (phone.replace(/\D/g, '').length < 3) {
       Alert.alert('电话格式不正确', '请检查患者联系电话。');
+      return;
+    }
+    if (!groupName) {
+      Alert.alert('请选择研究组别', '请明确选择用药组或不用药组。');
       return;
     }
     if (!parseLocalDate(enrollmentAt)) {
@@ -589,6 +593,7 @@ function PatientEntryPage({ onOpen, onBack, onRefresh, actor }: BackProps & { ac
     locked.current = true;
     setBusy(true);
     try {
+      if (agreed && !groupName) throw new Error('请返回第一步选择研究组别。');
       if (!agreed) {
         await recordDeclinedRegistration({
           name, age: age.trim() ? Number(age) : undefined, gender, notes, actor,
@@ -598,6 +603,7 @@ function PatientEntryPage({ onOpen, onBack, onRefresh, actor }: BackProps & { ac
         onBack();
         return;
       }
+      if (!groupName) throw new Error('请先选择研究组别。');
       const patientId = await addExistingPatient({
         name, phone, age: age.trim() ? Number(age) : undefined,
         gender, groupName, enrollmentAt, notes,
@@ -661,7 +667,7 @@ function PatientEntryPage({ onOpen, onBack, onRefresh, actor }: BackProps & { ac
               <View style={styles.infoDivider} />
               <InfoLine label="姓名" value={name.trim()} />
               <InfoLine label="联系电话" value={phone.trim()} />
-              <InfoLine label="组别" value={groupName} />
+              <InfoLine label="组别" value={groupName ?? "未选择"} />
               <InfoLine label="入组日期" value={enrollmentAt} />
               {notes.trim() ? <InfoLine label="备注" value={notes.trim()} /> : null}
             </Card>
