@@ -80,7 +80,7 @@ import { dateKey, formatLocalDateTime, parseLocalDate, parseLocalDateTime } from
 import { STUDY_PROTOCOL_VERSION } from './config/studyProtocol';
 import { theme, typeScale } from './theme';
 import FollowupCalendarHome from './FollowupCalendarHome';
-import { calendarReminderStatus, requestCalendarAccess, writableCalendars, configureCalendarReminder, syncCalendarFollowups, type WritableCalendar, type CalendarReminderStatus } from './services/calendarReminders';
+import { calendarReminderStatus, requestCalendarAccess, writableCalendars, configureCalendarReminder, syncCalendarFollowups, preferredWritableCalendars, createCalendarRingingTest, openCalendarRingingTest, openNextCalendarReminder, type WritableCalendar, type CalendarReminderStatus } from './services/calendarReminders';
 import {
   EMPTY_CLINICAL_INFO,
   type DashboardSummary,
@@ -1168,6 +1168,8 @@ function SettingsPage({ onRefresh }: Props) {
   const [calendarReminder, setCalendarReminder] = useState<CalendarReminderStatus | null>(null);
   const [calendarOptions, setCalendarOptions] = useState<WritableCalendar[]>([]);
   const [calendarBusy, setCalendarBusy] = useState(false);
+  const [calendarAdvanced, setCalendarAdvanced] = useState(false);
+  const [calendarTestCreated, setCalendarTestCreated] = useState(false);
   // Only ask for a channel-settings review once per settings-page visit.
   // Android does not expose a runtime permission to enable heads-up or lock-screen display.
   const channelReviewPrompted = useRef(false);
@@ -1207,9 +1209,29 @@ function SettingsPage({ onRefresh }: Props) {
         return;
       }
       const calendars = await writableCalendars();
+      const ordinary = preferredWritableCalendars(calendars);
       setCalendarOptions(calendars);
       await refreshCalendarStatus();
-      if (!calendars.length) Alert.alert('没有可写日历', '请先在手机日历应用中建立本地或账户日历，然后返回研伴重试。');
+      if (!calendars.length) {
+        Alert.alert('没有可写日历', '请先打开手机日历，创建并保存一条普通日程，再返回研伴重试。');
+      } else if (calendarReminder?.enabled) {
+        setCalendarAdvanced(true);
+      } else {
+        const local = ordinary.find(item => item.isLocal);
+        if (local) {
+          // Prefer the ordinary phone-local calendar without exposing provider
+          // account identifiers or special birthday/countdown calendars.
+          await configureCalendarReminder(local.id, true);
+          await syncCalendarFollowups(await getTasks());
+          await onRefresh(true);
+          setCalendarReminder(await calendarReminderStatus());
+          setCalendarAdvanced(false);
+          Alert.alert('已连接手机本地日历', '已同步未来随访日程。请继续点击“测试日历响铃”，检查手机日历的响铃提醒开关。');
+        } else {
+          setCalendarAdvanced(true);
+          Alert.alert('请选择普通日历', '没有识别到手机本地日历。请选择日常使用的普通日历，避免生日或其他应用的专用日历。');
+        }
+      }
     } catch (error) {
       Alert.alert('无法读取手机日历', error instanceof Error ? error.message : '请检查系统日历权限。');
     } finally {
@@ -1227,6 +1249,7 @@ function SettingsPage({ onRefresh }: Props) {
       await syncCalendarFollowups(await getTasks());
       await onRefresh(true);
       setCalendarReminder(await calendarReminderStatus());
+      setCalendarAdvanced(false);
       Alert.alert('日历提醒已开启', '研伴已向所选日历写入未来随访日期。每天只有一条提醒，不包含患者信息和数量。请另外确认该日历应用的通知和锁屏提醒设置。');
     } catch (error) {
       Alert.alert('日历同步未成功', error instanceof Error ? error.message : '请返回检查权限和日历账户。');
@@ -1480,18 +1503,62 @@ function SettingsPage({ onRefresh }: Props) {
               状态：{calendarReminder?.enabled ? calendarReminder.permissionGranted ? '已开启' : '已开启但日历权限失效' : '尚未开启'}
               {' · '}已同步日期 {calendarReminder?.syncedDates ?? 0}
             </Text>
-            <Text style={styles.helperText}>注意：账户日历可能云同步，虽然不含患者信息，但“研伴随访”标题和时间仍可能上传至该账户。优先选择本地日历。手机日历的通知、横幅和锁屏开关需要单独确认。</Text>
+            <Text style={styles.helperText}>日历账户可能云同步日程标题与时间。建议优先使用手机本地日历。</Text>
             <View style={{ height: 10 }} />
-            <PrimaryButton title={calendarBusy ? '正在处理…' : calendarReminder?.enabled ? '查看其他可写日历 / 重新选择' : '开启日历提醒 · 选择日历'} disabled={calendarBusy} onPress={() => void enableCalendarReminders()} />
-            {calendarOptions.map(calendar => (
-              <Pressable key={calendar.id} accessibilityRole="button"
-                onPress={() => void selectCalendarReminder(calendar)}
-                disabled={calendarBusy}
-                style={[styles.calendarOptionRow, calendar.id === calendarReminder?.calendarId && styles.calendarOptionSelected]}>
-                <Text style={styles.calendarOptionName}>{calendar.name}</Text>
-                <Text style={styles.helperText}>{calendar.account || '本地日历'}  {calendar.id === calendarReminder?.calendarId ? '✓ 已选' : '选择 ›'}</Text>
-              </Pressable>
-            ))}
+            <PrimaryButton
+              title={calendarBusy ? '正在处理…' : calendarReminder?.enabled ? '更换日历（高级设置）' : '一键开启 · 优先使用本地日历'}
+              disabled={calendarBusy}
+              onPress={() => void enableCalendarReminders()} />
+            {calendarAdvanced ? (
+              <View style={{ marginTop: 12 }}>
+                <Text style={styles.cardHeading}>选择用于提醒的日历</Text>
+                <Text style={styles.helperText}>已隐藏生日、纪念日、倒数日等专用日历；只有高级选项会展示技术账户。</Text>
+                {preferredWritableCalendars(calendarOptions).map(calendar => (
+                  <Pressable key={calendar.id} accessibilityRole="button"
+                    onPress={() => void selectCalendarReminder(calendar)} disabled={calendarBusy}
+                    style={[styles.calendarOptionRow, calendar.id === calendarReminder?.calendarId && styles.calendarOptionSelected]}>
+                    <Text style={styles.calendarOptionName}>{calendar.isLocal ? '手机本地日历' : calendar.name}</Text>
+                    <Text style={styles.helperText}>{calendar.isLocal ? '推荐 · 存储在本机' : '账户日历 · 可能同步到云端'}{calendar.id === calendarReminder?.calendarId ? ' · 已选' : ''}</Text>
+                  </Pressable>
+                ))}
+                {preferredWritableCalendars(calendarOptions).length === 0 ? (
+                  <Text style={styles.helperText}>没有识别到普通可写日历。请先在手机日历中创建普通日历。</Text>
+                ) : null}
+                <Pressable accessibilityRole="button" onPress={() => setCalendarAdvanced(false)} style={styles.calendarOptionRow}>
+                  <Text style={styles.calendarOptionName}>收起高级设置</Text>
+                </Pressable>
+              </View>
+            ) : null}
+            {calendarReminder?.enabled ? (
+              <View style={{ marginTop: 12, gap: 8 }}>
+                <Text style={styles.cardHeading}>响铃设置 · 请务必验证</Text>
+                <Text style={styles.helperText}>研伴已请求系统日历在 09:00 提醒，但 OPPO / 一加日历的“响铃提醒”是独立开关，普通日历接口无法替你强制打开。</Text>
+                <PrimaryButton title={calendarBusy ? '正在创建测试…' : '创建 2 分钟后的日历响铃测试'} disabled={calendarBusy}
+                  onPress={() => {
+                    setCalendarBusy(true);
+                    createCalendarRingingTest()
+                      .then(() => {
+                        setCalendarTestCreated(true);
+                        Alert.alert('日历测试已创建', '约 2 分钟后开始。请立即打开测试日程，手动打开“响铃提醒”开关，然后返回桌面锁屏等待。', [
+                          { text: '稍后', style: 'cancel' },
+                          { text: '打开测试日程', onPress: () => void openCalendarRingingTest().catch(error =>
+                            Alert.alert('无法打开日历', error instanceof Error ? error.message : '请手动打开日历。')) },
+                        ]);
+                      })
+                      .catch(error => Alert.alert('创建测试失败', error instanceof Error ? error.message : '请选择有效日历。'))
+                      .finally(() => setCalendarBusy(false));
+                  }} />
+                {calendarTestCreated ? (
+                  <PrimaryButton title="打开测试日程 · 设置响铃提醒" secondary
+                    onPress={() => void openCalendarRingingTest().catch(error => Alert.alert('无法打开日历', error instanceof Error ? error.message : '请手动打开日历。'))} />
+                ) : null}
+                <PrimaryButton title="打开下一条正式随访日程 · 检查响铃" secondary
+                  onPress={() => void openNextCalendarReminder().then(found => {
+                    if (!found) Alert.alert('暂无未来随访日程', '当前没有已同步的未来日期。可以先创建 2 分钟测试。');
+                  }).catch(error => Alert.alert('无法打开日程', error instanceof Error ? error.message : '请手动打开日历。'))} />
+                <Text style={styles.helperText}>如果测试没有响铃，请检查系统日历 App 的通知、声音、锁屏和该日程的“响铃提醒”开关。不能以“日程已创建”代表响铃成功。</Text>
+              </View>
+            ) : null}
             {calendarReminder?.enabled ? (
               <>
                 <View style={{ height: 8 }} />
@@ -1762,7 +1829,7 @@ function SettingsPage({ onRefresh }: Props) {
           expanded={aboutDetailsOpen}
           onToggle={() => setAboutDetailsOpen((value) => !value)}
         >
-          <InfoLine label="应用版本" value="2.0.13-preview" />
+          <InfoLine label="应用版本" value="2.0.14-preview" />
           <InfoLine label="研究方案" value={STUDY_PROTOCOL_VERSION} />
           <Text style={styles.helperText}>当前使用两步患者信息登记与同意确认。研究资格核查和正式知情同意仍应按研究方案执行。</Text>
         </SettingsDisclosure>
