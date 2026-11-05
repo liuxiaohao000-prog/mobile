@@ -1517,8 +1517,8 @@ function SettingsPage({ onRefresh }: Props) {
         <Card>
           <View style={styles.taskTop}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.cardHeading}>随访提醒</Text>
-              <Text style={styles.settingsSubtitle}>系统通知与定时提醒</Text>
+              <Text style={styles.cardHeading}>原生闹钟（备用 / 测试）</Text>
+              <Text style={styles.settingsSubtitle}>日历提醒未启用时使用</Text>
             </View>
             <View style={[styles.reminderStatusDot, { backgroundColor: reminderReady && (Platform.OS !== 'android' || Boolean(reminderDiagnostics?.batteryOptimizationExempt)) ? theme.success : theme.accent }]} />
           </View>
@@ -1529,7 +1529,9 @@ function SettingsPage({ onRefresh }: Props) {
                 : '基础提醒权限已开启'}
           </Text>
           <Text style={styles.helperText}>
-            每日提醒使用系统闹钟。允许通知后，还需要到系统“患者随访提醒”渠道检查横幅（悬浮通知）、锁屏显示和震动；这些开关不能由 App 自动打开。息屏投递还受后台策略影响。
+            {calendarReminder?.enabled
+              ? '当前正式随访提醒已交给手机日历。本区域仅用于旧版原生闹钟的备用配置与通知测试；日历通知需到日历应用中单独开启。'
+              : '尚未启用日历模式时，正式提醒仍使用研伴原生闹钟。请确认研伴通知渠道、横幅、锁屏和震动已启用。'}
           </Text>
           {Platform.OS === 'android' ? (
             <View style={{ marginTop: 10, marginBottom: 4 }}>
@@ -1537,12 +1539,14 @@ function SettingsPage({ onRefresh }: Props) {
             </View>
           ) : null}
           <View style={{ height: 14 }} />
-          <PrimaryButton
-            title={configuringReminders ? '正在检查…' : reminderReady ? '检查提醒状态' : '开启随访提醒'}
-            onPress={() => void configureReminders()}
-            disabled={configuringReminders}
-            loading={configuringReminders}
-          />
+          {!calendarReminder?.enabled ? (
+            <PrimaryButton
+              title={configuringReminders ? '正在检查…' : reminderReady ? '检查原生闹钟' : '开启原生闹钟提醒'}
+              onPress={() => void configureReminders()}
+              disabled={configuringReminders}
+              loading={configuringReminders}
+            />
+          ) : null}
 
           {Platform.OS === 'android' ? (
             <View style={{ marginTop: 12, marginBottom: 8 }}>
