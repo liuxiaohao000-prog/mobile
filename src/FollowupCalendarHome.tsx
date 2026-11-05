@@ -26,7 +26,6 @@ export default function FollowupCalendarHome({
   const year = now.getFullYear();
   const [month, setMonth] = useState(now.getMonth());
   const [selectedDay, setSelectedDay] = useState<number | null>(now.getDate());
-  const [selectedMonthDate, setSelectedMonthDate] = useState(month);
   const daysInMonth = new Date(year, month + 1, 0).getDate();
   const firstWeekday = new Date(year, month, 1).getDay();
   const today = dateKey(now);
@@ -58,7 +57,6 @@ export default function FollowupCalendarHome({
   const changeMonth = (next: number) => {
     if (next < 0 || next > 11) return;
     setMonth(next);
-    setSelectedMonthDate(next);
     setSelectedDay(next === new Date().getMonth() ? new Date().getDate() : null);
   };
 
@@ -214,7 +212,7 @@ const s = StyleSheet.create({
   yearText: { color: '#073544', fontWeight: '900', fontSize: 23 },
   yearUnit: { fontSize: 12, fontWeight: '500' },
   monthGrid: { flex: 1, flexDirection: 'row', flexWrap: 'wrap', gap: 5, justifyContent: 'space-between' },
-  monthPill: { width: '15.5%', borderRadius: 11, minHeight: 34, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFFFFF' },
+  monthPill: { width: '14.6%', borderRadius: 11, minHeight: 34, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFFFFF' },
   monthPillActive: { backgroundColor: '#009E9F' },
   monthPillText: { fontSize: 12, fontWeight: '700', color: '#38515A' },
   monthPillTextActive: { color: '#FFFFFF' },
