@@ -1500,7 +1500,7 @@ function SettingsPage({ onRefresh }: Props) {
           expanded={aboutDetailsOpen}
           onToggle={() => setAboutDetailsOpen(value => !value)}
         >
-          <InfoLine label="应用版本" value="2.0.17-preview" />
+          <InfoLine label="应用版本" value="2.0.18-preview" />
           <InfoLine label="研究方案" value={STUDY_PROTOCOL_VERSION} />
           <Text style={styles.helperText}>患者登记为两步流程。正式知情同意与资格审查仍须按研究方案执行。</Text>
         </SettingsDisclosure>
