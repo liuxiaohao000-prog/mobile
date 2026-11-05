@@ -1,6 +1,6 @@
 {
   "name": "patient-followup-local",
-  "version": "2.0.10-preview",
+  "version": "2.0.11-preview",
   "private": true,
   "main": "index.ts",
   "scripts": {
