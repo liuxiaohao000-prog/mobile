@@ -77,6 +77,7 @@ import {
   type BackgroundMonitorState,
 } from './services/backgroundMonitor';
 import { dateKey, formatLocalDateTime, parseLocalDate, parseLocalDateTime } from './domain/dates';
+import { STUDY_PROTOCOL_VERSION } from './config/studyProtocol';
 import { theme, typeScale } from './theme';
 import FollowupCalendarHome from './FollowupCalendarHome';
 import {
@@ -677,6 +678,31 @@ function PatientEntryPage({ onOpen, onBack, onRefresh, actor }: BackProps & { ac
       </ScrollView>
     </KeyboardAvoidingView>
   );
+}
+
+function SectionHeading({ title, action, onPress }: { title: string; action?: string; onPress?: () => void }) {
+  return <View style={styles.sectionHeading}>
+    <Text style={styles.sectionTitle}>{title}</Text>
+    {action && onPress ? <Pressable onPress={onPress}><Text style={styles.sectionAction}>{action}  ›</Text></Pressable> : null}
+  </View>;
+}
+
+function TaskCard({ task, onPress }: { task: FollowupTask; onPress: () => void }) {
+  return <Pressable accessibilityRole="button" onPress={onPress}>
+    <Card style={styles.taskCard}>
+      <View style={styles.taskTop}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.taskPatient}>{task.patientNumber}</Text>
+          <Text style={styles.taskMeta}>{task.patientName} · {task.groupName}</Text>
+        </View>
+        <StatusBadge status={task.status} />
+      </View>
+      <View style={styles.taskBottom}>
+        <Text style={styles.taskNode}>第 {task.nodeMonth} 个月随访</Text>
+        <Text style={styles.taskDate}>{task.plannedDate}  ›</Text>
+      </View>
+    </Card>
+  </Pressable>;
 }
 
 function HomeTab({ summary, tasks, screenings, onOpen, onRefresh, onOpenFollowups }: Props & { summary: DashboardSummary; tasks: FollowupTask[]; screenings: Screening[]; onOpenFollowups: () => void }) {
