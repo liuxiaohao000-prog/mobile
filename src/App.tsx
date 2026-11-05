@@ -102,6 +102,7 @@ import {
 import { dateKey, formatLocalDateTime, parseLocalDate, parseLocalDateTime } from './domain/dates';
 import { STUDY_PROTOCOL_VERSION } from './config/studyProtocol';
 import { theme, typeScale } from './theme';
+import FollowupCalendarHome from './FollowupCalendarHome';
 import {
   EMPTY_CLINICAL_INFO,
   type AiResult,
@@ -595,87 +596,17 @@ function TodayFollowupDialog({
 }
 
 function HomePage({
-  summary,
-  tasks,
-  screenings,
-  onOpen,
-  onRefresh,
+  summary, tasks, onOpen, onRefresh,
 }: Props & { summary: DashboardSummary; tasks: FollowupTask[]; screenings: Screening[] }) {
-  const todayTasks = tasks
-    .filter((task) => task.status === 'DUE' || task.status === 'OVERDUE')
-    .sort((a, b) => (a.status === 'OVERDUE' ? -1 : 0) - (b.status === 'OVERDUE' ? -1 : 0));
-  const openScreenings = screenings.slice(0, 4);
-  const toScreening = (screening: Screening) => {
-    if (screening.status === 'ANALYZING') {
-      Alert.alert('AI 分析中', '请等待当前分析完成后再打开这条预筛。');
-    } else if (screening.status === 'DRAFT') {
-      onOpen({ kind: 'screening', id: screening.id });
-    } else if (screening.status === 'AI_SKIPPED') {
-      onOpen({ kind: 'consent', id: screening.id });
-    } else {
-      onOpen({ kind: 'result', id: screening.id });
-    }
-  };
   return (
-    <ScrollView contentContainerStyle={styles.pageContent}>
-      <View style={styles.homeTitleBlock}>
-        <Text style={styles.eyebrow}>{new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' })}</Text>
-        <Text style={styles.homeTitle}>今日工作</Text>
-        <Text style={styles.homeDescription}>从待办开始，让每一位患者的随访都有记录。</Text>
-      </View>
-      <View style={styles.hero}>
-        <Text style={styles.homeDueLabel}>待处理随访</Text>
-        <View style={styles.homeDueRow}>
-          <Text style={styles.homeDueNumber}>{todayTasks.length}</Text>
-          <Text style={styles.homeDueUnit}>项任务</Text>
-        </View>
-        <View style={styles.homeStatRow}>
-          <View style={styles.homeStatItem}>
-            <Text style={styles.homeStatNumber}>{summary.dueTasks}</Text>
-            <Text style={styles.homeStatLabel}>今日到期</Text>
-          </View>
-          <View style={styles.homeStatItem}>
-            <Text style={[styles.homeStatNumber, { color: theme.danger }]}>{summary.overdueTasks}</Text>
-            <Text style={styles.homeStatLabel}>已逾期</Text>
-          </View>
-          <View style={styles.homeStatItem}>
-            <Text style={styles.homeStatNumber}>{summary.activePatients}</Text>
-            <Text style={styles.homeStatLabel}>在组患者</Text>
-          </View>
-        </View>
-      </View>
-
-      <SectionHeading title="优先处理" />
-      {todayTasks.length === 0 ? (
-        <EmptyState title="今天没有到期待办" subtitle="已安排的随访会按计划时间出现在这里。" />
-      ) : (
-        todayTasks.slice(0, 4).map((task) => (
-          <TaskCard key={task.id} task={task} onPress={() => onOpen({ kind: 'task', id: task.id })} />
-        ))
-      )}
-
-      <SectionHeading title="待处理预筛" action="刷新" onPress={() => { void onRefresh(); }} />
-      {openScreenings.length === 0 ? (
-        <EmptyState title="暂无待处理预筛" subtitle="新增患者可以先录入资料，再进行资格核实。" />
-      ) : (
-        openScreenings.map((screening) => (
-          <Pressable key={screening.id} accessibilityRole="button" onPress={() => toScreening(screening)}>
-            <Card style={styles.screeningCard}>
-              <View style={styles.taskTop}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.taskPatient}>{screening.name || '未填写姓名'}</Text>
-                  <Text style={styles.taskMeta}>{screening.age > 0 ? `${screening.age} 岁` : '年龄待填写'} · {screening.gender} · 更新于 {formatLocalDateTime(new Date(screening.updatedAt))}</Text>
-                </View>
-                <ScreeningStatusBadge status={screening.status} />
-              </View>
-              <Text style={styles.screeningAction}>继续处理  ›</Text>
-            </Card>
-          </Pressable>
-        ))
-      )}
-      <PrimaryButton title="新增或补录患者" onPress={() => onOpen({ kind: 'patientEntry' })} />
-      <View style={{ height: 12 }} />
-    </ScrollView>
+    <FollowupCalendarHome
+      summary={summary}
+      tasks={tasks}
+      onOpenTask={(id) => onOpen({ kind: 'task', id })}
+      onAddPatient={() => onOpen({ kind: 'patientEntry' })}
+      onOpenFollowups={() => onOpen({ kind: 'tab' })}
+      onRefresh={() => { void onRefresh(); }}
+    />
   );
 }
 
@@ -2434,9 +2365,9 @@ function BackupAccessGate({ busy, onRequest, onSkip }: { busy: boolean; onReques
 
 function TabBar({ active, onChange }: { active: Tab; onChange: (tab: Tab) => void }) {
   const items: Array<{ id: Tab; title: string; ios: string; android: string }> = [
-    { id: 'home', title: '工作台', ios: 'square.grid.2x2.fill', android: 'dashboard', },
-    { id: 'patients', title: '患者', ios: 'person.2.fill', android: 'groups' },
+    { id: 'home', title: '首页', ios: 'house.fill', android: 'home', },
     { id: 'followups', title: '随访', ios: 'calendar', android: 'calendar_month' },
+    { id: 'patients', title: '患者', ios: 'person.2.fill', android: 'groups' },
     { id: 'settings', title: '我的', ios: 'gearshape.fill', android: 'settings' },
   ];
   return (
@@ -2739,11 +2670,11 @@ export default function App() {
         <StatusBar barStyle="dark-content" />
       <View style={styles.appHeader}>
         <View style={styles.brandMark}>
-          <SymbolView name={{ ios: 'heart.text.square.fill', android: 'medical_services', web: 'medical_services' }} size={21} tintColor="#FFFFFF" />
+          <SymbolView name={{ ios: 'calendar.badge.clock', android: 'calendar_month', web: 'calendar_month' }} size={22} tintColor="#FFFFFF" />
         </View>
         <View style={{ flex: 1 }}>
           <Text style={styles.brandName}>研伴</Text>
-          <Text style={styles.brandCaption}>患者入组与随访</Text>
+          <Text style={styles.brandCaption}>让每一次关怀，都如期而至</Text>
         </View>
         {refreshing ? <ActivityIndicator color={theme.primary} /> : null}
         <Pressable
@@ -2771,6 +2702,10 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
+
+  // V2.0.11 calendar-first visual system: shared surfaces and navigation.
+  // These styles are reused by patient, follow-up, screening, record and settings pages.
+  yanbanBottomAccent: { height: 3, width: 28, backgroundColor: '#00A9A6', borderRadius: 2 },
   briefingOverlay: {
     flex: 1,
     backgroundColor: 'rgba(16, 32, 39, 0.45)',
@@ -2824,24 +2759,24 @@ const styles = StyleSheet.create({
   briefingPrivacy: { color: theme.muted, fontSize: 11, lineHeight: 16, textAlign: 'center' },
   briefingDone: { backgroundColor: theme.primary, minHeight: 42, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
   briefingDoneText: { color: '#FFFFFF', fontSize: 14, fontWeight: '700' },
-  briefingHeaderButton: { minHeight: 34, justifyContent: 'center', alignItems: 'center', backgroundColor: theme.primarySoft, borderRadius: 12, paddingHorizontal: 11, marginLeft: 10 },
+  briefingHeaderButton: { minHeight: 36, justifyContent: 'center', alignItems: 'center', backgroundColor: '#E0F9F6', borderRadius: 14, paddingHorizontal: 12, marginLeft: 10 },
   briefingHeaderButtonText: { color: theme.primaryDark, fontSize: 12, fontWeight: '700' },
   safe: { flex: 1, backgroundColor: theme.canvas, paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight ?? 0) : 0 },
   fill: { flex: 1 },
   appHeader: {
-    height: 54,
+    height: 67,
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 18,
     borderBottomColor: theme.border,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    backgroundColor: theme.paper,
+    borderBottomWidth: 0,
+    backgroundColor: '#FFFFFF',
   },
-  brandMark: { width: 38, height: 38, borderRadius: 12, backgroundColor: theme.primary, alignItems: 'center', justifyContent: 'center', marginRight: 11 },
+  brandMark: { width: 41, height: 41, borderRadius: 14, backgroundColor: '#00AFAE', alignItems: 'center', justifyContent: 'center', marginRight: 12 },
   brandMarkText: { color: '#FFFFFF', fontSize: 18, fontWeight: '800' },
-  brandName: { color: theme.ink, fontSize: 16, fontWeight: '700', letterSpacing: 0.2 },
-  brandCaption: { color: theme.muted, fontSize: 12, marginTop: 1 },
-  pageContent: { paddingHorizontal: 18, paddingTop: 20, paddingBottom: 32, gap: 14 },
+  brandName: { color: '#083A45', fontSize: 21, fontWeight: '900', letterSpacing: 1.0 },
+  brandCaption: { color: '#66969B', fontSize: 10, fontWeight: '600', marginTop: 1 },
+  pageContent: { paddingHorizontal: 16, paddingTop: 18, paddingBottom: 36, gap: 15 },
   hero: { padding: 20, borderRadius: 20, backgroundColor: theme.primarySoft },
   homeTitleBlock: { paddingBottom: 2, gap: 4 },
   homeTitle: { color: theme.ink, fontSize: 28, lineHeight: 36, fontWeight: '700' },
@@ -2857,7 +2792,7 @@ const styles = StyleSheet.create({
   eyebrow: { color: theme.primaryDark, letterSpacing: 0.3, fontSize: 12, fontWeight: '700' },
   heroTitle: { color: theme.ink, ...typeScale.pageTitle, marginTop: 8 },
   heroCopy: { color: theme.muted, fontSize: 16, lineHeight: 24, marginTop: 7, marginBottom: 18 },
-  card: { backgroundColor: theme.paper, borderRadius: 16, padding: 18, borderWidth: StyleSheet.hairlineWidth, borderColor: theme.border },
+  card: { backgroundColor: theme.paper, borderRadius: 21, padding: 19, borderWidth: 0, shadowColor: '#208C95', shadowOpacity: 0.05, shadowRadius: 12, elevation: 2 },
   entryCard: { padding: 20, minHeight: 190 },
   entryIcon: { width: 48, height: 48, borderRadius: 14, backgroundColor: theme.primarySoft, alignItems: 'center', justifyContent: 'center', marginBottom: 12 },
   entryTitle: { color: theme.ink, fontSize: 18, lineHeight: 25, fontWeight: '600' },
@@ -2883,12 +2818,12 @@ const styles = StyleSheet.create({
   pageHeader: { marginBottom: 2 },
   backButton: { marginBottom: 8, alignSelf: 'flex-start', minHeight: 44, justifyContent: 'center', paddingRight: 12 },
   backText: { color: theme.primary, fontSize: 14, fontWeight: '700' },
-  pageTitle: { color: theme.ink, ...typeScale.pageTitle },
+  pageTitle: { color: '#0B3847', fontSize: 28, lineHeight: 36, fontWeight: '900', letterSpacing: 0.3 },
   pageSubtitle: { color: theme.muted, fontSize: 15, marginTop: 5, lineHeight: 23 },
   label: { color: theme.ink, ...typeScale.label, marginBottom: 8 },
   requiredMark: { color: theme.danger, fontWeight: '700' },
   field: { marginTop: 14 },
-  input: { borderColor: theme.border, borderWidth: 1, borderRadius: 11, color: theme.ink, fontSize: 16, paddingHorizontal: 13, paddingVertical: 12, backgroundColor: theme.paper, minHeight: 50 },
+  input: { borderColor: '#CDE5E8', borderWidth: 1, borderRadius: 14, color: theme.ink, fontSize: 16, paddingHorizontal: 14, paddingVertical: 12, backgroundColor: '#F8FCFC', minHeight: 52 },
   inputMultiline: { minHeight: 88, paddingTop: 12 },
   datePickerTrigger: { borderColor: theme.border, borderWidth: 1, borderRadius: 11, backgroundColor: theme.paper, minHeight: 52, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', gap: 11 },
   datePickerValue: { flex: 1, color: theme.ink, fontSize: 16, fontWeight: '600' },
@@ -2906,7 +2841,7 @@ const styles = StyleSheet.create({
   calendarDayText: { color: theme.ink, fontSize: 14, fontWeight: '600' },
   calendarDayTextSelected: { color: '#FFFFFF', fontWeight: '700' },
   calendarHint: { color: theme.muted, fontSize: 13, textAlign: 'right', marginTop: 7 },
-  button: { backgroundColor: theme.primary, borderRadius: 12, minHeight: 50, paddingHorizontal: 16, alignItems: 'center', justifyContent: 'center' },
+  button: { backgroundColor: theme.primary, borderRadius: 15, minHeight: 52, paddingHorizontal: 16, alignItems: 'center', justifyContent: 'center' },
   buttonSecondary: { backgroundColor: theme.primarySoft },
   buttonDanger: { backgroundColor: theme.danger },
   buttonDisabled: { opacity: 0.55 },
@@ -2939,9 +2874,9 @@ const styles = StyleSheet.create({
   spacer: { height: 11 },
   patientCard: { paddingVertical: 14 },
   patientCardTop: { flexDirection: 'row', alignItems: 'center', gap: 11 },
-  avatar: { height: 43, width: 43, backgroundColor: theme.primarySoft, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
-  avatarText: { color: theme.primaryDark, fontWeight: '700', fontSize: 18 },
-  patientName: { color: theme.ink, fontSize: 16, fontWeight: '600' },
+  avatar: { height: 46, width: 46, backgroundColor: '#D7F8F3', borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
+  avatarText: { color: '#008F8E', fontWeight: '900', fontSize: 19 },
+  patientName: { color: '#0C3745', fontSize: 17, fontWeight: '800' },
   patientState: { color: theme.primary, fontSize: 12, fontWeight: '600' },
   patientPhone: { color: theme.muted, fontSize: 13, marginTop: 11, marginLeft: 54 },
   infoDivider: { height: 1, backgroundColor: theme.border, marginVertical: 13 },
@@ -2969,10 +2904,10 @@ const styles = StyleSheet.create({
   reminderDisclosureText: { color: theme.primaryDark, fontSize: 14, fontWeight: '600' },
   reminderDetails: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.border, paddingTop: 8 },
   reminderTestHint: { color: theme.ink, fontSize: 13, lineHeight: 19, marginTop: 12 },
-  tabBar: { flexDirection: 'row', backgroundColor: theme.paper, borderTopColor: theme.border, borderTopWidth: StyleSheet.hairlineWidth, height: 68, paddingBottom: Platform.OS === 'ios' ? 5 : 0 },
+  tabBar: { flexDirection: 'row', backgroundColor: '#FFFFFF', borderTopColor: '#DFF0F0', borderTopWidth: 1, height: 74, paddingBottom: Platform.OS === 'ios' ? 5 : 0 },
   tabItem: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 3, minHeight: 48 },
-  tabText: { color: theme.muted, fontSize: 12, fontWeight: '600' },
-  tabActive: { color: theme.primary },
+  tabText: { color: '#819399', fontSize: 12, fontWeight: '700' },
+  tabActive: { color: '#00A6A5', fontWeight: '900' },
   followupListContent: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 32, flexGrow: 1 },
   followupsHeader: { gap: 12, marginBottom: 4 },
   followupListSeparator: { height: 12 },
