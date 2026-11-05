@@ -120,6 +120,8 @@ class FollowupReminderModule(
         putDouble("testVibrationStartedAt", preferences.getLong(KEY_TEST_VIBRATION_AT, 0L).toDouble())
         putString("testError", preferences.getString(KEY_TEST_ERROR, "") ?: "")
         putDouble("channelImportance", (channel?.importance ?: 0).toDouble())
+        // Channel-level visibility does not override the device-wide lock-screen policy.
+        putInt("channelLockscreenVisibility", channel?.lockscreenVisibility ?: android.app.Notification.VISIBILITY_SECRET)
         putBoolean("batteryOptimizationExempt", (reactContext.getSystemService(Context.POWER_SERVICE) as PowerManager)
           .isIgnoringBatteryOptimizations(reactContext.packageName))
         // Bucket is an OS-level hint, not proof of OEM-specific process policy.
