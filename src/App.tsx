@@ -80,7 +80,7 @@ import { dateKey, formatLocalDateTime, parseLocalDate, parseLocalDateTime } from
 import { STUDY_PROTOCOL_VERSION } from './config/studyProtocol';
 import { theme, typeScale } from './theme';
 import FollowupCalendarHome from './FollowupCalendarHome';
-import { calendarReminderStatus, requestCalendarAccess, writableCalendars, configureCalendarReminder, type WritableCalendar, type CalendarReminderStatus } from './services/calendarReminders';
+import { calendarReminderStatus, requestCalendarAccess, writableCalendars, configureCalendarReminder, syncCalendarFollowups, type WritableCalendar, type CalendarReminderStatus } from './services/calendarReminders';
 import {
   EMPTY_CLINICAL_INFO,
   type DashboardSummary,
@@ -1222,6 +1222,9 @@ function SettingsPage({ onRefresh }: Props) {
     try {
       const next = await configureCalendarReminder(calendar.id, true);
       setCalendarReminder(next);
+      // Surface sync failure to the user. The existing native alarm is not
+      // cancelled until the Calendar Provider write succeeds.
+      await syncCalendarFollowups(await getTasks());
       await onRefresh(true);
       setCalendarReminder(await calendarReminderStatus());
       Alert.alert('日历提醒已开启', '研伴已向所选日历写入未来随访日期。每天只有一条提醒，不包含患者信息和数量。请另外确认该日历应用的通知和锁屏提醒设置。');
@@ -1873,7 +1876,13 @@ export default function App() {
       const exactAlarmGranted = await getExactAlarmPermission();
       const permissionChanged = exactAlarmPermissionRef.current !== null
         && exactAlarmPermissionRef.current !== exactAlarmGranted;
-      await refreshLocalReminders(forceReminderReschedule || permissionChanged);
+      try {
+        await refreshLocalReminders(forceReminderReschedule || permissionChanged);
+      } catch (reminderError) {
+        // A Calendar Provider error or revoked calendar permission must not
+        // prevent access to the encrypted patient database and follow-up UI.
+        console.warn('Follow-up reminder sync needs attention:', reminderError);
+      }
       // Event-driven update: never poll the encrypted database from the monitor.
       await syncBackgroundMonitorSnapshot(nextTasks).catch(() => undefined);
       exactAlarmPermissionRef.current = exactAlarmGranted;
