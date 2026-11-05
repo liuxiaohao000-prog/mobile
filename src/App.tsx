@@ -80,6 +80,7 @@ import { dateKey, formatLocalDateTime, parseLocalDate, parseLocalDateTime } from
 import { STUDY_PROTOCOL_VERSION } from './config/studyProtocol';
 import { theme, typeScale } from './theme';
 import FollowupCalendarHome from './FollowupCalendarHome';
+import { calendarReminderStatus, requestCalendarAccess, writableCalendars, configureCalendarReminder, type WritableCalendar, type CalendarReminderStatus } from './services/calendarReminders';
 import {
   EMPTY_CLINICAL_INFO,
   type DashboardSummary,
@@ -1164,6 +1165,9 @@ function SettingsPage({ onRefresh }: Props) {
   const [operatorDetailsOpen, setOperatorDetailsOpen] = useState(false);
   const [aboutDetailsOpen, setAboutDetailsOpen] = useState(false);
   const [configuringReminders, setConfiguringReminders] = useState(false);
+  const [calendarReminder, setCalendarReminder] = useState<CalendarReminderStatus | null>(null);
+  const [calendarOptions, setCalendarOptions] = useState<WritableCalendar[]>([]);
+  const [calendarBusy, setCalendarBusy] = useState(false);
   // Only ask for a channel-settings review once per settings-page visit.
   // Android does not expose a runtime permission to enable heads-up or lock-screen display.
   const channelReviewPrompted = useRef(false);
@@ -1188,6 +1192,60 @@ function SettingsPage({ onRefresh }: Props) {
       setMonitorBusy(false);
     }
   };
+  const refreshCalendarStatus = useCallback(async () => {
+    if (Platform.OS !== 'android') return;
+    const status = await calendarReminderStatus();
+    setCalendarReminder(status);
+  }, []);
+  const enableCalendarReminders = async () => {
+    if (calendarBusy) return;
+    setCalendarBusy(true);
+    try {
+      if (!(await requestCalendarAccess())) {
+        Alert.alert('需要日历权限', '请允许日历读取和写入，研伴才能创建及核对随访日程。拒绝权限不会影响患者登记。');
+        await refreshCalendarStatus();
+        return;
+      }
+      const calendars = await writableCalendars();
+      setCalendarOptions(calendars);
+      await refreshCalendarStatus();
+      if (!calendars.length) Alert.alert('没有可写日历', '请先在手机日历应用中建立本地或账户日历，然后返回研伴重试。');
+    } catch (error) {
+      Alert.alert('无法读取手机日历', error instanceof Error ? error.message : '请检查系统日历权限。');
+    } finally {
+      setCalendarBusy(false);
+    }
+  };
+  const selectCalendarReminder = async (calendar: WritableCalendar) => {
+    if (calendarBusy) return;
+    setCalendarBusy(true);
+    try {
+      const next = await configureCalendarReminder(calendar.id, true);
+      setCalendarReminder(next);
+      await onRefresh(true);
+      setCalendarReminder(await calendarReminderStatus());
+      Alert.alert('日历提醒已开启', '研伴已向所选日历写入未来随访日期。每天只有一条提醒，不包含患者信息和数量。请另外确认该日历应用的通知和锁屏提醒设置。');
+    } catch (error) {
+      Alert.alert('日历同步未成功', error instanceof Error ? error.message : '请返回检查权限和日历账户。');
+    } finally {
+      setCalendarBusy(false);
+    }
+  };
+  const disableCalendarReminders = async () => {
+    if (calendarBusy) return;
+    setCalendarBusy(true);
+    try {
+      const next = await configureCalendarReminder(null, false);
+      setCalendarReminder(next);
+      setCalendarOptions([]);
+      await onRefresh(true);
+      Alert.alert('已切回研伴提醒', '已尝试删除研伴创建的未来日历日程，原生提醒重新启用。');
+    } catch (error) {
+      Alert.alert('切换失败', error instanceof Error ? error.message : '请检查日历权限后重试。');
+    } finally {
+      setCalendarBusy(false);
+    }
+  };
   const refreshNotificationPermissions = useCallback(async () => {
     const [notification, exactAlarm, diagnostics] = await Promise.all([
       Notifications.getPermissionsAsync(),
@@ -1204,6 +1262,7 @@ function SettingsPage({ onRefresh }: Props) {
       getAutomaticBackupDirectoryName(),
       refreshNotificationPermissions(),
       refreshMonitorStatus(),
+      refreshCalendarStatus(),
     ])
       .then(([operator, directoryName]) => {
         setActor(operator);
@@ -1214,10 +1273,11 @@ function SettingsPage({ onRefresh }: Props) {
       if (state === 'active') {
         void refreshNotificationPermissions();
         void refreshMonitorStatus();
+        void refreshCalendarStatus();
       }
     });
     return () => subscription.remove();
-  }, [refreshNotificationPermissions, refreshMonitorStatus]);
+  }, [refreshNotificationPermissions, refreshMonitorStatus, refreshCalendarStatus]);
   const save = async () => {
     try {
       await setOperatorName(actor);
@@ -1403,6 +1463,54 @@ function SettingsPage({ onRefresh }: Props) {
     <KeyboardAvoidingView style={styles.fill} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView contentContainerStyle={styles.pageContent}>
         <PageHeader title="我的" subtitle="账户、提醒与本机数据" />
+        {Platform.OS === 'android' ? (
+          <Card>
+            <View style={styles.taskTop}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.cardHeading}>手机日历提醒</Text>
+                <Text style={styles.settingsSubtitle}>推荐 · 由日历应用独立提醒</Text>
+              </View>
+              <View style={[styles.reminderStatusDot, { backgroundColor: calendarReminder?.enabled && calendarReminder.permissionGranted ? theme.success : theme.accent }]} />
+            </View>
+            <Text style={styles.helperText}>每天最多一条日程：「研伴 · 今日随访提醒」，上午 09:00 通知，不展示患者姓名、电话或数量。未来日程以研伴数据库为准；写入后由手机日历应用负责提醒。</Text>
+            <Text style={styles.helperText}>
+              状态：{calendarReminder?.enabled ? calendarReminder.permissionGranted ? '已开启' : '已开启但日历权限失效' : '尚未开启'}
+              {' · '}已同步日期 {calendarReminder?.syncedDates ?? 0}
+            </Text>
+            <Text style={styles.helperText}>注意：账户日历可能云同步，虽然不含患者信息，但“研伴随访”标题和时间仍可能上传至该账户。优先选择本地日历。手机日历的通知、横幅和锁屏开关需要单独确认。</Text>
+            <View style={{ height: 10 }} />
+            <PrimaryButton title={calendarBusy ? '正在处理…' : calendarReminder?.enabled ? '查看其他可写日历 / 重新选择' : '开启日历提醒 · 选择日历'} disabled={calendarBusy} onPress={() => void enableCalendarReminders()} />
+            {calendarOptions.map(calendar => (
+              <Pressable key={calendar.id} accessibilityRole="button"
+                onPress={() => void selectCalendarReminder(calendar)}
+                disabled={calendarBusy}
+                style={[styles.calendarOptionRow, calendar.id === calendarReminder?.calendarId && styles.calendarOptionSelected]}>
+                <Text style={styles.calendarOptionName}>{calendar.name}</Text>
+                <Text style={styles.helperText}>{calendar.account || '本地日历'}  {calendar.id === calendarReminder?.calendarId ? '✓ 已选' : '选择 ›'}</Text>
+              </Pressable>
+            ))}
+            {calendarReminder?.enabled ? (
+              <>
+                <View style={{ height: 8 }} />
+                <PrimaryButton title={calendarBusy ? '正在处理…' : '立即重新同步日历'} secondary disabled={calendarBusy}
+                  onPress={() => {
+                    setCalendarBusy(true);
+                    onRefresh(true).then(() => refreshCalendarStatus())
+                      .then(() => Alert.alert('同步请求已提交', '请检查上方状态和系统日历的未来随访日程。'))
+                      .catch(error => Alert.alert('同步失败', error instanceof Error ? error.message : '请检查权限。'))
+                      .finally(() => setCalendarBusy(false));
+                  }} />
+                <View style={{ height: 8 }} />
+                <PrimaryButton title="关闭日历提醒 · 恢复研伴闹钟" secondary disabled={calendarBusy} onPress={() => {
+                  Alert.alert('切换回研伴闹钟？', '研伴将删除自己创建的日历日程，恢复原生闹钟。', [
+                    { text: '取消', style: 'cancel' },
+                    { text: '切换', onPress: () => void disableCalendarReminders() },
+                  ]);
+                }} />
+              </>
+            ) : null}
+          </Card>
+        ) : null}
         <Card>
           <View style={styles.taskTop}>
             <View style={{ flex: 1 }}>
@@ -1647,7 +1755,7 @@ function SettingsPage({ onRefresh }: Props) {
           expanded={aboutDetailsOpen}
           onToggle={() => setAboutDetailsOpen((value) => !value)}
         >
-          <InfoLine label="应用版本" value="2.0.12-preview" />
+          <InfoLine label="应用版本" value="2.0.13-preview" />
           <InfoLine label="研究方案" value={STUDY_PROTOCOL_VERSION} />
           <Text style={styles.helperText}>当前使用两步患者信息登记与同意确认。研究资格核查和正式知情同意仍应按研究方案执行。</Text>
         </SettingsDisclosure>
@@ -2037,6 +2145,9 @@ const styles = StyleSheet.create({
   registrationStepActive: { backgroundColor: '#BDF5EF', borderWidth: 1, borderColor: '#00A8A7' },
   registrationStepLabel: { fontSize: 13, fontWeight: '800', color: '#065A61' },
   registrationNotes: { minHeight: 180, paddingTop: 16, textAlignVertical: 'top' },
+  calendarOptionRow: { paddingVertical: 12, paddingHorizontal: 13, borderRadius: 12, borderWidth: 1, borderColor: '#CDE5E8', backgroundColor: '#F8FCFC', marginTop: 8 },
+  calendarOptionSelected: { backgroundColor: '#D7F8F2', borderColor: '#00A5A4' },
+  calendarOptionName: { fontWeight: '800', color: '#0A3442', fontSize: 14 },
   briefingOverlay: {
     flex: 1,
     backgroundColor: 'rgba(16, 32, 39, 0.45)',
