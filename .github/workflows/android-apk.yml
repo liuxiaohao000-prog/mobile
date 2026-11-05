@@ -64,5 +64,5 @@ jobs:
           gh release create "$TAG" dist/yanban-v2-preview.apk \
             --target "${GITHUB_SHA}" \
             --title "研伴 V2.0.10 Preview ${GITHUB_RUN_NUMBER}" \
-            --notes "自动构建的测试版。尚未完成真实手机的通知、震动和数据库升级验证。升级前请确认已有可靠备份，切勿卸载旧版。" \
+            --notes "本版修改参见仓库 README.md 和 docs/v2-preview.md 的 V2.0.10 记录。横幅、锁屏显示需由用户在系统通知设置中开启。尚未完成真机验证，升级前请备份，切勿卸载旧版。" \
             --prerelease
