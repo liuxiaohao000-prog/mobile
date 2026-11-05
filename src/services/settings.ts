@@ -10,14 +10,6 @@ export type AiSettings = {
   model: string;
 };
 
-export async function getOperatorName(): Promise<string> {
-  return getMeta('operator_name', '本机操作人');
-}
-
-export async function setOperatorName(value: string): Promise<void> {
-  await setMeta('operator_name', value.trim() || '本机操作人');
-}
-
 export async function getAiSettings(): Promise<AiSettings> {
   // Read the encrypted database first. On a fresh reinstall this initializes
   // the database connection and restores SecureStore values before the API key
