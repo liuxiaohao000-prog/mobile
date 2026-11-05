@@ -19,48 +19,28 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import * as ImagePicker from 'expo-image-picker';
 import { File, Paths } from 'expo-file-system';
 import * as Notifications from 'expo-notifications';
 import { SymbolView } from 'expo-symbols';
 import {
   addExistingPatient,
   recordDeclinedRegistration,
-  beginAnalysis,
-  closeScreening,
-  createScreening,
-  enrollPatient,
   exitPatient,
-  failAnalysis,
-  finishAnalysis,
   getDashboardSummary,
   getPatient,
   getLatestConsent,
   getLatestQualificationVerification,
-  getScreening,
   getTasks,
   listDueFollowupContacts,
   listFollowupRecords,
-  listAnalysisHistory,
   listPatientTasks,
   listPatients,
   listScreenings,
   recoverInterruptedAnalyses,
-  recordConsent,
   recordFollowup,
-  saveScreeningDraft,
-  acknowledgeMissingInformation,
-  skipAiAnalysis,
   DuplicatePatientError,
   type DueFollowupContact,
 } from './storage/repository';
-import {
-  bytesToBase64,
-  deleteEncryptedImage,
-  encryptedImageMimeType,
-  readEncryptedImage,
-  storeEncryptedImage,
-} from './storage/secureFiles';
 import { getDatabase } from './storage/database';
 import {
   getAutomaticBackupDirectoryName,
@@ -68,7 +48,6 @@ import {
   requestAutomaticBackupAccess,
   startAutomaticBackup,
 } from './services/automaticBackup';
-import { analyzeEligibility, AiConfigurationError } from './services/aiClient';
 import {
   configureNotifications,
   getExactAlarmPermission,
@@ -98,21 +77,15 @@ import {
   type BackgroundMonitorState,
 } from './services/backgroundMonitor';
 import { dateKey, formatLocalDateTime, parseLocalDate, parseLocalDateTime } from './domain/dates';
-import { STUDY_PROTOCOL_VERSION } from './config/studyProtocol';
 import { theme, typeScale } from './theme';
 import FollowupCalendarHome from './FollowupCalendarHome';
 import {
   EMPTY_CLINICAL_INFO,
-  type AiResult,
-  type AnalysisRun,
-  type ClinicalInfo,
-  type ConsentDecision,
   type DashboardSummary,
   type FollowupTask,
   type Gender,
   type Patient,
   type Screening,
-  type ScreeningStatus,
 } from './types';
 
 type Tab = 'home' | 'patients' | 'followups' | 'settings';
@@ -423,37 +396,6 @@ function StatusBadge({ status }: { status: FollowupTask['status'] }) {
   );
 }
 
-function ScreeningStatusBadge({ status }: { status: ScreeningStatus }) {
-  const label: Record<ScreeningStatus, string> = {
-    DRAFT: '待补资料',
-    ANALYZING: '分析中',
-    PRELIMINARY_PASS: '初筛通过',
-    MISSING_INFO: '需补充信息',
-    AI_SKIPPED: '已跳过 AI',
-    INELIGIBLE: '初筛不符合',
-    ANALYSIS_FAILED: '分析失败',
-    ENROLLED: '已入组',
-    CLOSED: '已结束',
-  };
-  const color = status === 'PRELIMINARY_PASS'
-    ? theme.primary
-    : status === 'INELIGIBLE' || status === 'ANALYSIS_FAILED'
-      ? theme.danger
-        : status === 'MISSING_INFO' || status === 'AI_SKIPPED'
-          ? theme.accent
-          : theme.muted;
-  const bg = status === 'PRELIMINARY_PASS'
-    ? theme.primarySoft
-    : status === 'INELIGIBLE' || status === 'ANALYSIS_FAILED'
-      ? theme.dangerSoft
-        : status === 'MISSING_INFO'
-          ? '#FBF1E1'
-          : status === 'AI_SKIPPED'
-            ? theme.blueSoft
-            : '#EEF2F3';
-  return <View style={[styles.badge, { backgroundColor: bg }]}><Text style={[styles.badgeText, { color }]}>{label[status]}</Text></View>;
-}
-
 function EmptyState({ title, subtitle }: { title: string; subtitle: string }) {
   return (
     <Card style={styles.emptyCard}>
@@ -737,698 +679,8 @@ function PatientEntryPage({ onOpen, onBack, onRefresh, actor }: BackProps & { ac
   );
 }
 
-function ExistingPatientPage({ actor, onBack, onRefresh, onOpen }: BackProps & { actor: string }) {
-  const [name, setName] = useState('');
-  const [phone, setPhone] = useState('');
-  const [age, setAge] = useState('');
-  const [gender, setGender] = useState<Gender | undefined>();
-  const [groupName, setGroupName] = useState<'用药组' | '不用药组' | undefined>();
-  const [enrollmentAt, setEnrollmentAt] = useState('');
-  const [clinical, setClinical] = useState(EMPTY_CLINICAL_INFO);
-  const [ecgPath, setEcgPath] = useState('');
-  const [notes, setNotes] = useState('');
-  const [consentDecision, setConsentDecision] = useState<ConsentDecision | undefined>();
-  const [consentEvidencePath, setConsentEvidencePath] = useState('');
-  const [qualificationRecorded, setQualificationRecorded] = useState(false);
-  const [verifier, setVerifier] = useState('');
-  const [verificationNote, setVerificationNote] = useState('');
-  const [busy, setBusy] = useState(false);
-  const saved = useRef(false);
-  const previewPath = useRef('');
-  const proofPath = useRef('');
-
-  useEffect(() => () => {
-    if (!saved.current) {
-      [previewPath.current, proofPath.current].filter(Boolean).forEach((path) => {
-        deleteEncryptedImage(path).catch(() => undefined);
-      });
-    }
-  }, []);
-
-  const pickImage = async (kind: 'ecg' | 'consent') => {
-    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!permission.granted) {
-      Alert.alert('需要照片权限', '请允许访问照片，以选择需要保存的图片。');
-      return;
-    }
-    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsEditing: false, quality: 1 });
-    if (result.canceled || !result.assets[0]?.uri) return;
-    try {
-      const nextPath = await storeEncryptedImage(result.assets[0].uri);
-      if (kind === 'ecg') {
-        if (previewPath.current) await deleteEncryptedImage(previewPath.current);
-        previewPath.current = nextPath;
-        setEcgPath(nextPath);
-      } else {
-        if (consentEvidencePath) await deleteEncryptedImage(consentEvidencePath);
-        proofPath.current = nextPath;
-        setConsentEvidencePath(nextPath);
-      }
-    } catch (error) {
-      Alert.alert('图片保存失败', error instanceof Error ? error.message : '请重试。');
-    }
-  };
-
-  const updateClinical = (key: keyof ClinicalInfo, value: string) => setClinical((current) => ({ ...current, [key]: value }));
-  const submit = async () => {
-    const date = parseLocalDate(enrollmentAt);
-    if (!name.trim() || !phone.trim() || !date || !groupName) {
-      Alert.alert('请补全必填信息', '姓名、电话、入组日期和所在组为必填项。');
-      return;
-    }
-    const parsedAge = age.trim() ? Number(age) : undefined;
-    if (parsedAge !== undefined && (!Number.isInteger(parsedAge) || parsedAge < 1 || parsedAge > 130)) {
-      Alert.alert('年龄格式不正确', '年龄请填写 1 到 130 的整数；也可以留空。');
-      return;
-    }
-    setBusy(true);
-    try {
-      const patientId = await addExistingPatient({
-        name,
-        phone,
-        age: parsedAge,
-        gender,
-        groupName,
-        enrollmentAt: dateKey(date),
-        clinical,
-        ecgPath,
-        notes,
-        consentDecision,
-        consentEvidencePath: consentEvidencePath || undefined,
-        qualificationRecorded,
-        verifier,
-        verificationNote,
-        actor,
-      });
-      saved.current = true;
-      await onRefresh();
-      onOpen({ kind: 'patient', id: patientId });
-    } catch (error) {
-      if (error instanceof DuplicatePatientError) Alert.alert('患者可能已存在', error.message);
-      else Alert.alert('补录失败', error instanceof Error ? error.message : '请检查资料后重试。');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <KeyboardAvoidingView style={styles.fill} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <ScrollView contentContainerStyle={styles.pageContent} keyboardShouldPersistTaps="handled">
-        <PageHeader title="补录已入组患者" subtitle="带 * 的字段为必填，其余资料可以留空。" onBack={onBack} />
-        <Card>
-          <Text style={styles.cardHeading}>患者身份</Text>
-          <TextField label="患者姓名" value={name} onChangeText={setName} required placeholder="请输入姓名" />
-          <TextField label="联系电话" value={phone} onChangeText={setPhone} required keyboardType="phone-pad" placeholder="请输入联系电话" />
-          <TextField label="年龄（选填）" value={age} onChangeText={setAge} keyboardType="numeric" placeholder="周岁" />
-          <ChoiceRow label="性别（选填）" options={['男', '女', '其他']} value={gender} onChange={setGender} />
-        </Card>
-        <Card>
-          <Text style={styles.cardHeading}>入组信息</Text>
-          <EnrollmentDatePicker label="入组日期" value={enrollmentAt} onChange={setEnrollmentAt} />
-          <ChoiceRow label="所在组" options={['用药组', '不用药组']} value={groupName} onChange={setGroupName} required />
-          <Text style={styles.helperText}>请选择患者已进入的研究组。此记录用于生成后续随访计划。</Text>
-        </Card>
-        <Card>
-          <Text style={styles.cardHeading}>临床资料（全部选填）</Text>
-          <TextField label="症状描述" value={clinical.symptoms} onChangeText={(v) => updateClinical('symptoms', v)} multiline placeholder="例如胸痛持续时间、伴随症状" />
-          <TextField label="诊断信息" value={clinical.diagnosis} onChangeText={(v) => updateClinical('diagnosis', v)} multiline placeholder="例如 STEMI / NSTEMI" />
-          <TextField label="肌钙蛋白" value={clinical.troponin} onChangeText={(v) => updateClinical('troponin', v)} multiline placeholder="数值、参考上限或动态变化" />
-          <TextField label="发病至就诊时间" value={clinical.onsetToPresentation} onChangeText={(v) => updateClinical('onsetToPresentation', v)} placeholder="例如 8 小时" />
-          <TextField label="PCI 治疗计划" value={clinical.pciPlan} onChangeText={(v) => updateClinical('pciPlan', v)} multiline />
-          <TextField label="PCI 禁忌情况" value={clinical.pciContraindications} onChangeText={(v) => updateClinical('pciContraindications', v)} multiline />
-          <TextField label="麝香保心丸过敏或耐受情况" value={clinical.drugAllergy} onChangeText={(v) => updateClinical('drugAllergy', v)} multiline />
-          <TextField label="妊娠或哺乳情况" value={clinical.pregnancyStatus} onChangeText={(v) => updateClinical('pregnancyStatus', v)} />
-          <TextField label="近 3 个月参与其他研究情况" value={clinical.otherTrials} onChangeText={(v) => updateClinical('otherTrials', v)} multiline />
-          <TextField label="研究者补充说明" value={clinical.investigatorNotes} onChangeText={(v) => updateClinical('investigatorNotes', v)} multiline />
-          <View style={styles.spacer} />
-          <PrimaryButton title={ecgPath ? '心电图已加密保存' : '选填：添加心电图图片'} onPress={() => pickImage('ecg')} secondary />
-        </Card>
-        <Card>
-          <Text style={styles.cardHeading}>历史知情同意（选填）</Text>
-          <ChoiceRow label="患者选择" options={['同意参加', '不同意', '未记录']} value={consentDecision === 'AGREED' ? '同意参加' : consentDecision === 'DECLINED' ? '不同意' : consentDecision === 'NOT_RECORDED' ? '未记录' : undefined} onChange={(value) => setConsentDecision(value === '同意参加' ? 'AGREED' : value === '不同意' ? 'DECLINED' : 'NOT_RECORDED')} />
-          <View style={styles.spacer} />
-          <PrimaryButton title={consentEvidencePath ? '同意证明已加密保存' : '选填：添加同意证明图片'} onPress={() => pickImage('consent')} secondary />
-          <Text style={styles.helperText}>可以只记录患者选择、只添加证明图片，或都不填写。</Text>
-        </Card>
-        <Card>
-          <Text style={styles.cardHeading}>历史资格核实（选填）</Text>
-          <View style={styles.switchRow}>
-            <Text style={styles.switchLabel}>记录为已完成资格核实</Text>
-            <Switch value={qualificationRecorded} onValueChange={setQualificationRecorded} trackColor={{ true: theme.primary }} />
-          </View>
-          <TextField label="核实人" value={verifier} onChangeText={setVerifier} placeholder="选填" />
-          <TextField label="核实说明" value={verificationNote} onChangeText={setVerificationNote} multiline placeholder="选填" />
-        </Card>
-        <Card>
-          <Text style={styles.cardHeading}>患者情况说明（选填）</Text>
-          <TextField label="补充说明" value={notes} onChangeText={setNotes} multiline placeholder="仅供本机研究记录" />
-        </Card>
-        <Text style={styles.privacyNote}>既有患者补录会直接创建档案和 1、3、6、12 个月随访任务，不要求重新进行 AI 预筛或入组核实。记录操作人：{actor}</Text>
-        <PrimaryButton title={busy ? '正在保存患者资料…' : '保存并打开患者档案'} onPress={submit} disabled={busy} />
-      </ScrollView>
-    </KeyboardAvoidingView>
-  );
-}
-
-function MetricCard({ label, value, tone }: { label: string; value: string; tone: 'gold' | 'red' | 'green' | 'blue' }) {
-  const color = tone === 'gold' ? '#A66E17' : tone === 'red' ? theme.danger : tone === 'green' ? theme.primary : '#426C89';
-  const bg = tone === 'gold' ? '#FBF3E6' : tone === 'red' ? theme.dangerSoft : tone === 'green' ? theme.primarySoft : theme.blueSoft;
-  return (
-    <View style={[styles.metricCard, { backgroundColor: bg }]}>
-      <Text style={[styles.metricValue, { color }]}>{value}</Text>
-      <Text style={styles.metricLabel}>{label}</Text>
-    </View>
-  );
-}
-
-function SectionHeading({ title, action, onPress }: { title: string; action?: string; onPress?: () => void }) {
-  return (
-    <View style={styles.sectionHeading}>
-      <Text style={styles.sectionTitle}>{title}</Text>
-      {action && onPress ? <Pressable onPress={onPress}><Text style={styles.sectionAction}>{action}  ›</Text></Pressable> : null}
-    </View>
-  );
-}
-
-function TaskCard({ task, onPress }: { task: FollowupTask; onPress: () => void }) {
-  return (
-    <Pressable onPress={onPress}>
-      <Card style={styles.taskCard}>
-        <View style={styles.taskTop}>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.taskPatient}>{task.patientNumber}</Text>
-            <Text style={styles.taskMeta}>{task.patientName} · {task.groupName}</Text>
-          </View>
-          <StatusBadge status={task.status} />
-        </View>
-        <View style={styles.taskBottom}>
-          <Text style={styles.taskNode}>第 {task.nodeMonth} 个月随访</Text>
-          <Text style={styles.taskDate}>{task.plannedDate}  ›</Text>
-        </View>
-      </Card>
-    </Pressable>
-  );
-}
-
 function HomeTab({ summary, tasks, screenings, onOpen, onRefresh, onOpenFollowups }: Props & { summary: DashboardSummary; tasks: FollowupTask[]; screenings: Screening[]; onOpenFollowups: () => void }) {
   return <HomePage summary={summary} tasks={tasks} screenings={screenings} onOpen={onOpen} onRefresh={onRefresh} onOpenFollowups={onOpenFollowups} />;
-}
-
-function ScreeningPage({
-  id: initialId,
-  actor,
-  onBack,
-  onAnalyzed,
-  onSkipped,
-}: {
-  id?: string;
-  actor: string;
-  onBack: () => void;
-  onAnalyzed: (id: string) => void;
-  onSkipped: (id: string) => void;
-}) {
-  const [id, setId] = useState(initialId ?? '');
-  const [name, setName] = useState('');
-  const [age, setAge] = useState('');
-  const [gender, setGender] = useState<Gender>('男');
-  const [clinical, setClinical] = useState<ClinicalInfo>(EMPTY_CLINICAL_INFO);
-  const [ecgPath, setEcgPath] = useState('');
-  const [previewUri, setPreviewUri] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [ready, setReady] = useState(Boolean(initialId));
-
-  useEffect(() => {
-    let active = true;
-    (async () => {
-      try {
-        if (initialId) {
-          const existing = await getScreening(initialId);
-          if (!active || !existing) return;
-          setName(existing.name);
-          setAge(existing.age ? String(existing.age) : '');
-          setGender(existing.gender);
-          setClinical(existing.clinical);
-          setEcgPath(existing.ecgPath);
-          if (existing.ecgPath) {
-            const bytes = await readEncryptedImage(existing.ecgPath);
-            const data = await bytesToBase64(bytes);
-            setPreviewUri('data:' + encryptedImageMimeType(existing.ecgPath) + ';base64,' + data);
-          }
-          setId(existing.id);
-        } else {
-          const newId = await createScreening(actor, EMPTY_CLINICAL_INFO);
-          if (active) setId(newId);
-        }
-      } catch (error) {
-        Alert.alert('无法打开预筛', error instanceof Error ? error.message : '本机存储初始化失败。');
-      } finally {
-        if (active) setReady(true);
-      }
-    })();
-    return () => {
-      active = false;
-    };
-  }, [actor, initialId]);
-
-  const changeClinical = (key: keyof ClinicalInfo, value: string) => {
-    setClinical((current) => ({ ...current, [key]: value }));
-  };
-
-  const pickEcg = async () => {
-    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!permission.granted) {
-      Alert.alert('需要照片权限', '请允许访问照片，以选择患者心电图。');
-      return;
-    }
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsEditing: false,
-      quality: 1,
-    });
-    if (result.canceled || !result.assets[0]?.uri) return;
-    try {
-      const nextPath = await storeEncryptedImage(result.assets[0].uri);
-      await saveScreeningDraft(
-        id,
-        {
-          name,
-          age: Number(age) || 0,
-          gender,
-          clinical,
-          ecgPath: nextPath,
-        },
-        actor,
-      );
-      await deleteEncryptedImage(ecgPath);
-      const bytes = await readEncryptedImage(nextPath);
-      setPreviewUri(
-        'data:' + encryptedImageMimeType(nextPath) + ';base64,' + (await bytesToBase64(bytes)),
-      );
-      setEcgPath(nextPath);
-    } catch (error) {
-      Alert.alert('图片保存失败', error instanceof Error ? error.message : '请重试。');
-    }
-  };
-
-  const runAnalysis = async () => {
-    if (!id) return;
-    const parsedAge = Number(age);
-    if (!name.trim() || !Number.isInteger(parsedAge) || parsedAge < 1) {
-      Alert.alert('资料不完整', '请填写患者姓名和正整数年龄。');
-      return;
-    }
-    if (!ecgPath) {
-      Alert.alert('缺少心电图', '请先上传患者心电图。');
-      return;
-    }
-    let activeAnalysisId = '';
-    try {
-      setBusy(true);
-      await saveScreeningDraft(
-        id,
-        { name, age: parsedAge, gender, clinical, ecgPath },
-        actor,
-      );
-      const settings = await getAiSettings();
-      if (!settings.apiKey.trim()) {
-        Alert.alert('尚未设置 AI API Key', '请先在“我的”页面填写 API Key，预筛资料已保存在本机。');
-        return;
-      }
-      const screening = await getScreening(id);
-      if (!screening) throw new Error('读取预筛资料失败。');
-      const started = await beginAnalysis(screening, settings.model, STUDY_PROTOCOL_VERSION, actor);
-      activeAnalysisId = started.analysisId;
-      const result = await analyzeEligibility(screening);
-      await finishAnalysis(started.analysisId, id, result);
-      onAnalyzed(id);
-    } catch (error) {
-      if (activeAnalysisId) {
-        try {
-          await failAnalysis(
-            activeAnalysisId,
-            id,
-            error instanceof Error ? error.message : '分析失败',
-          );
-        } catch {
-          // Keep the original user-facing error.
-        }
-      }
-      if (error instanceof AiConfigurationError) {
-        Alert.alert('暂不能开始审核', error.message);
-      } else if (error instanceof Error) {
-        Alert.alert('审核失败', error.message + '\n资料已保存在本机，可以重试。');
-      } else {
-        Alert.alert('审核失败', '资料已保存在本机，可以重试。');
-      }
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const skipAnalysis = () => {
-    const parsedAge = Number(age);
-    if (!name.trim() || !Number.isInteger(parsedAge) || parsedAge < 1) {
-      Alert.alert('资料不完整', '请填写患者姓名和正整数年龄。');
-      return;
-    }
-    Alert.alert(
-      '跳过 AI 预筛？',
-      '本次不会进行 AI 资格判断，也不需要上传心电图。继续入组前，仍须由授权人员人工核实资格并记录核实说明。',
-      [
-        { text: '返回', style: 'cancel' },
-        {
-          text: '跳过并继续',
-          onPress: async () => {
-            try {
-              setBusy(true);
-              await saveScreeningDraft(
-                id,
-                { name, age: parsedAge, gender, clinical, ecgPath },
-                actor,
-              );
-              await skipAiAnalysis(id, actor);
-              onSkipped(id);
-            } catch (error) {
-              Alert.alert('无法继续', error instanceof Error ? error.message : '请检查资料后重试。');
-            } finally {
-              setBusy(false);
-            }
-          },
-        },
-      ],
-    );
-  };
-
-  const saveAndBack = async () => {
-    if (id) {
-      try {
-        await saveScreeningDraft(
-          id,
-          { name, age: Number(age) || 0, gender, clinical, ecgPath },
-          actor,
-        );
-      } catch (error) {
-        Alert.alert('草稿保存失败', error instanceof Error ? error.message : '请重试。');
-        return;
-      }
-    }
-    onBack();
-  };
-
-  if (!ready) return <LoadingView label="正在打开本地预筛资料…" />;
-
-  return (
-    <KeyboardAvoidingView style={styles.fill} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <ScrollView contentContainerStyle={styles.pageContent}>
-        <PageHeader title={initialId ? '补充预筛资料' : '新增患者预筛'} subtitle="可上传心电图进行 AI 辅助预筛，也可跳过 AI 并由授权人员人工核实。" onBack={saveAndBack} />
-        <Card>
-          <Text style={styles.cardHeading}>患者基本信息</Text>
-          <TextField label="姓名" value={name} onChangeText={setName} placeholder="请输入患者姓名" />
-          <TextField label="年龄" value={age} onChangeText={setAge} keyboardType="numeric" placeholder="周岁" />
-          <ChoiceRow label="性别" options={['男', '女', '其他']} value={gender} onChange={setGender} />
-        </Card>
-
-        <Card>
-          <Text style={styles.cardHeading}>心电图（可选）</Text>
-          <Text style={styles.helperText}>使用 AI 辅助预筛时需要上传；跳过 AI 即可不上传。选择的图片在本机加密保存，提交 AI 分析时才会发送给你配置的模型服务。</Text>
-          {previewUri ? <Image source={{ uri: previewUri }} style={styles.ecgPreview} resizeMode="contain" /> : null}
-          <PrimaryButton title={ecgPath ? '更换心电图' : '选择心电图图片'} onPress={pickEcg} secondary />
-        </Card>
-
-        <Card>
-          <Text style={styles.cardHeading}>临床资料</Text>
-          <Text style={styles.helperText}>能确认的信息尽量填写；未知或缺失项会由 AI 标记为待补充。</Text>
-          <TextField label="典型症状及持续时间" value={clinical.symptoms} onChangeText={(v) => changeClinical('symptoms', v)} multiline placeholder="例如：胸痛 30 分钟" />
-          <TextField label="STEMI / NSTEMI 诊断信息" value={clinical.diagnosis} onChangeText={(v) => changeClinical('diagnosis', v)} multiline placeholder="诊断依据、心电图表现等" />
-          <TextField label="高敏肌钙蛋白及动态变化" value={clinical.troponin} onChangeText={(v) => changeClinical('troponin', v)} multiline placeholder="数值、参考值上限和变化趋势" />
-          <TextField label="发病至就诊时间" value={clinical.onsetToPresentation} onChangeText={(v) => changeClinical('onsetToPresentation', v)} placeholder="例如：发病后 6 小时" />
-          <TextField label="PCI 治疗计划" value={clinical.pciPlan} onChangeText={(v) => changeClinical('pciPlan', v)} multiline placeholder="是否拟进行 PCI" />
-          <TextField label="PCI 禁忌证" value={clinical.pciContraindications} onChangeText={(v) => changeClinical('pciContraindications', v)} multiline placeholder="如无，请填写“无”" />
-          <TextField label="试验药物过敏或不耐受" value={clinical.drugAllergy} onChangeText={(v) => changeClinical('drugAllergy', v)} multiline placeholder="麝香保心丸过敏、无法耐受等" />
-          <TextField label="妊娠、备孕或哺乳情况" value={clinical.pregnancyStatus} onChangeText={(v) => changeClinical('pregnancyStatus', v)} placeholder="不适用时可说明" />
-          <TextField label="近 3 个月参与其他临床研究" value={clinical.otherTrials} onChangeText={(v) => changeClinical('otherTrials', v)} multiline placeholder="如无，请填写“无”" />
-          <TextField label="研究者判断" value={clinical.investigatorNotes} onChangeText={(v) => changeClinical('investigatorNotes', v)} multiline placeholder="其他需要纳入评估的信息" />
-        </Card>
-
-        <PrimaryButton title={busy ? '正在提交 AI 分析…' : '保存并开始 AI 预筛'} onPress={runAnalysis} disabled={busy} />
-        <View style={{ height: 10 }} />
-        <PrimaryButton title="跳过 AI，继续患者同意" onPress={skipAnalysis} disabled={busy} secondary />
-        {busy ? <ActivityIndicator color={theme.primary} style={{ marginTop: 16 }} /> : null}
-        <Text style={styles.privacyNote}>姓名和电话不会发送给 AI。跳过 AI 时不会发送心电图或临床资料。</Text>
-        <View style={{ height: 20 }} />
-      </ScrollView>
-    </KeyboardAvoidingView>
-  );
-}
-
-function ResultPage({ id, actor, onBack, onOpen }: BackProps & { id: string; actor: string }) {
-  const [screening, setScreening] = useState<Screening>();
-  useEffect(() => {
-    getScreening(id).then(setScreening).catch(() => undefined);
-  }, [id]);
-  if (!screening) return <LoadingView label="正在读取 AI 审核结果…" />;
-  const run = screening.latestAnalysis;
-  const result = run?.result;
-  const verdict = run?.verdict;
-  const passed = verdict === 'ELIGIBLE';
-  const rejected = verdict === 'INELIGIBLE';
-  const color = passed ? theme.primary : rejected ? theme.danger : theme.accent;
-  const title = passed ? '初步审核通过' : rejected ? '明确不符合' : verdict === 'FAILED' ? '分析失败' : '资料需要补充';
-  const continueToConsent = () => onOpen({ kind: 'consent', id });
-
-  return (
-    <ScrollView contentContainerStyle={styles.pageContent}>
-      <PageHeader title="AI 审核结果" subtitle={'分析版本 ' + (run?.inputVersion ?? screening.version)} onBack={onBack} />
-      <Card>
-        <View style={[styles.resultMark, { backgroundColor: passed ? theme.primarySoft : rejected ? theme.dangerSoft : '#FBF1E1' }]}>
-          <Text style={[styles.resultMarkText, { color }]}>{passed ? '✓' : rejected ? '×' : '!'}</Text>
-        </View>
-        <Text style={[styles.resultTitle, { color }]}>{title}</Text>
-        <Text style={styles.resultSummary}>{result?.summary ?? run?.error ?? '请检查网络和 AI API 配置后重试。'}</Text>
-        {result?.reasons.map((reason, index) => <Text key={index} style={styles.bullet}>•  {reason}</Text>)}
-      </Card>
-      {result?.missing_fields.length ? (
-        <Card>
-          <Text style={styles.cardHeading}>缺少或需要核实的信息</Text>
-          {result.missing_fields.map((field, index) => <Text key={index} style={styles.bullet}>•  {field}</Text>)}
-        </Card>
-      ) : null}
-      {result?.evidence.length ? (
-        <Card>
-          <Text style={styles.cardHeading}>依据摘要</Text>
-          {result.evidence.map((item, index) => (
-            <View key={index} style={styles.evidenceItem}>
-              <Text style={styles.evidenceTitle}>{item.criterion || '评估项'}</Text>
-              <Text style={styles.helperText}>{item.finding}</Text>
-              {item.source ? <Text style={styles.evidenceSource}>来源：{item.source}</Text> : null}
-            </View>
-          ))}
-        </Card>
-      ) : null}
-      {passed ? (
-        <PrimaryButton title="进入患者同意环节" onPress={continueToConsent} />
-      ) : rejected ? (
-        <PrimaryButton
-          title="结束当前预筛"
-          danger
-          onPress={async () => {
-            await closeScreening(id, actor, 'AI 预筛明确不符合');
-            onBack();
-          }}
-        />
-      ) : verdict === 'MISSING_INFO' ? (
-        <>
-          <PrimaryButton
-            title="返回补充资料"
-            secondary
-            onPress={() => onOpen({ kind: 'screening', id })}
-          />
-          <View style={{ height: 10 }} />
-          <PrimaryButton
-            title="已知晓，继续"
-            onPress={async () => {
-              await acknowledgeMissingInformation(
-                id,
-                run?.id ?? '',
-                result?.missing_fields ?? [],
-                actor,
-              );
-              onOpen({ kind: 'consent', id });
-            }}
-          />
-        </>
-      ) : (
-        <PrimaryButton title="返回资料并重试" secondary onPress={() => onOpen({ kind: 'screening', id })} />
-      )}
-      <Text style={styles.privacyNote}>AI 结果是预筛判断；正式入组仍需授权人员核实研究资格。</Text>
-    </ScrollView>
-  );
-}
-
-function ConsentPage({
-  id,
-  actor,
-  onBack,
-  onOpen,
-  onRefresh,
-}: BackProps & { id: string; actor: string }) {
-  const [evidencePath, setEvidencePath] = useState('');
-  const [busy, setBusy] = useState(false);
-  const pickEvidence = async () => {
-    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!permission.granted) {
-      Alert.alert('需要照片权限', '如需提交可选证明，请允许访问照片。');
-      return;
-    }
-    try {
-      const picked = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ['images'],
-        allowsEditing: false,
-        quality: 1,
-      });
-      if (!picked.canceled && picked.assets[0]?.uri) {
-        const path = await storeEncryptedImage(picked.assets[0].uri);
-        await deleteEncryptedImage(evidencePath);
-        setEvidencePath(path);
-      }
-    } catch (error) {
-      Alert.alert('证明图片保存失败', error instanceof Error ? error.message : '请重试。');
-    }
-  };
-  const leaveConsentPage = () => {
-    if (evidencePath) deleteEncryptedImage(evidencePath).catch(() => undefined);
-    onBack();
-  };
-  const submit = async (decision: ConsentDecision) => {
-    try {
-      setBusy(true);
-      await recordConsent(id, decision, decision === 'AGREED' ? evidencePath || null : null, actor);
-      if (decision === 'DECLINED') {
-        deleteEncryptedImage(evidencePath).catch(() => undefined);
-        Alert.alert('已记录', '当前预筛已结束，不会创建正式患者或随访任务。');
-        await onRefresh();
-        onBack();
-      } else {
-        onOpen({ kind: 'enrollment', id });
-      }
-    } catch (error) {
-      Alert.alert('提交失败', error instanceof Error ? error.message : '请重试。');
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <ScrollView contentContainerStyle={styles.pageContent}>
-      <PageHeader title="患者同意" subtitle="记录患者选择；证明材料可选。" onBack={leaveConsentPage} />
-      <Card>
-        <Text style={styles.cardHeading}>患者是否同意参加本研究？</Text>
-        <Text style={styles.helperText}>请先向患者说明研究内容，并按研究流程完成知情同意核实。</Text>
-        <View style={styles.spacer} />
-        <PrimaryButton title="选择同意" onPress={() => submit('AGREED')} disabled={busy} />
-        <View style={{ height: 10 }} />
-        <PrimaryButton title="选择不同意" onPress={() => submit('DECLINED')} disabled={busy} secondary />
-      </Card>
-      <Card>
-        <Text style={styles.cardHeading}>可选：上传同意证明</Text>
-        <Text style={styles.helperText}>不上传也可以继续。证明图片会加密保存在本机。</Text>
-        <View style={styles.spacer} />
-        <PrimaryButton title={evidencePath ? '证明已保存在本机' : '选择证明图片'} onPress={pickEvidence} secondary />
-        {evidencePath ? <Text style={styles.successText}>已添加可选附件</Text> : null}
-      </Card>
-    </ScrollView>
-  );
-}
-
-function EnrollmentPage({
-  id,
-  actor,
-  onBack,
-  onOpen,
-  onRefresh,
-}: BackProps & { id: string; actor: string }) {
-  const [screening, setScreening] = useState<Screening>();
-  const [phone, setPhone] = useState('');
-  const [groupName, setGroupName] = useState<'用药组' | '不用药组'>('用药组');
-  const [enrollmentAt, setEnrollmentAt] = useState('');
-  const [notes, setNotes] = useState('');
-  const [verified, setVerified] = useState(false);
-  const [verifier, setVerifier] = useState(actor);
-  const [verificationNote, setVerificationNote] = useState('');
-  const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    getScreening(id).then(setScreening).catch(() => undefined);
-  }, [id]);
-
-  const submit = async () => {
-    if (!screening) return;
-    const date = parseLocalDate(enrollmentAt);
-    if (!date) {
-      Alert.alert('尚未选择入组日期', '请在日历中选择患者的入组日期。');
-      return;
-    }
-    if (!verified) {
-      Alert.alert('尚未完成正式资格核实', '请由授权人员完成核实后再确认入组。');
-      return;
-    }
-    setBusy(true);
-    try {
-      const patientId = await enrollPatient({
-        screeningId: id,
-        phone,
-        groupName,
-        enrollmentAt: dateKey(date),
-        notes,
-        actor,
-        qualificationVerified: verified,
-        verifier,
-        verificationNote,
-      });
-      await onRefresh();
-      onOpen({ kind: 'patient', id: patientId });
-    } catch (error) {
-      if (error instanceof DuplicatePatientError) {
-        Alert.alert('疑似重复患者', error.message);
-      } else {
-        Alert.alert('暂不能完成入组', error instanceof Error ? error.message : '请检查资料后重试。');
-      }
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  if (!screening) return <LoadingView label="正在读取入组资料…" />;
-  return (
-    <KeyboardAvoidingView style={styles.fill} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <ScrollView contentContainerStyle={styles.pageContent}>
-        <PageHeader title="正式入组登记" subtitle="选择入组日期，确认后生成患者编号和四个随访任务。" onBack={onBack} />
-        <Card>
-          <Text style={styles.cardHeading}>候选患者</Text>
-          <Text style={styles.patientName}>{screening.name}</Text>
-          <Text style={styles.helperText}>{screening.age} 岁 · {screening.gender}</Text>
-        </Card>
-        <Card>
-          <Text style={styles.cardHeading}>入组信息</Text>
-          <TextField label="患者电话（必填）" value={phone} onChangeText={setPhone} keyboardType="phone-pad" placeholder="请输入患者联系电话" />
-          <ChoiceRow label="所属组别" options={['用药组', '不用药组']} value={groupName} onChange={setGroupName} />
-          <EnrollmentDatePicker label="入组日期" value={enrollmentAt} onChange={setEnrollmentAt} />
-          <TextField label="患者情况说明（选填）" value={notes} onChangeText={setNotes} multiline placeholder="补充说明" />
-        </Card>
-        <Card>
-          <Text style={styles.cardHeading}>正式资格核实</Text>
-          <Text style={styles.helperText}>{screening.status === 'AI_SKIPPED' ? '本次已跳过 AI 预筛；授权人员须根据研究方案人工核实资格后才能入组。' : 'AI 负责预筛主判；授权人员核实正式临床资格后才能入组。'}</Text>
-          <View style={styles.switchRow}>
-            <Text style={styles.switchLabel}>授权人员已完成核实</Text>
-            <Switch value={verified} onValueChange={setVerified} trackColor={{ true: theme.primary }} />
-          </View>
-          <TextField label="核实人" value={verifier} onChangeText={setVerifier} placeholder="填写授权核实人" />
-          <TextField label="核实说明" value={verificationNote} onChangeText={setVerificationNote} multiline placeholder="记录正式资格核实依据" />
-        </Card>
-        <Text style={styles.privacyNote}>当前登录操作人：{actor}。入组日期和操作人确认后不可普通修改。</Text>
-        <PrimaryButton title={busy ? '正在完成入组…' : '确认正式入组'} onPress={submit} disabled={busy} />
-      </ScrollView>
-    </KeyboardAvoidingView>
-  );
 }
 
 function PatientListPage({ onOpen }: Props) {
@@ -1481,8 +733,6 @@ function PatientDetailPage({
 }: BackProps & { id: string; actor: string }) {
   const [patient, setPatient] = useState<Patient>();
   const [tasks, setTasks] = useState<FollowupTask[]>([]);
-  const [screening, setScreening] = useState<Screening>();
-  const [analysisHistory, setAnalysisHistory] = useState<AnalysisRun[]>([]);
   const [consent, setConsent] = useState<Awaited<ReturnType<typeof getLatestConsent>>>();
   const [qualification, setQualification] = useState<Awaited<ReturnType<typeof getLatestQualificationVerification>>>();
   const load = useCallback(async () => {
@@ -1490,15 +740,12 @@ function PatientDetailPage({
     setPatient(record);
     setTasks(await listPatientTasks(id));
     if (record) {
-      const [screeningRecord, consentRecord, verificationRecord] = await Promise.all([
-        getScreening(record.screeningId),
+      const [consentRecord, verificationRecord] = await Promise.all([
         getLatestConsent(record.screeningId),
         getLatestQualificationVerification(record.screeningId),
       ]);
-      setScreening(screeningRecord);
       setConsent(consentRecord);
       setQualification(verificationRecord);
-      setAnalysisHistory(await listAnalysisHistory(record.screeningId));
     }
   }, [id]);
   useEffect(() => { load().catch(() => undefined); }, [load]);
@@ -1537,38 +784,18 @@ function PatientDetailPage({
         <InfoLine label="入组日期" value={dateKey(parseLocalDate(patient.enrollmentAt) ?? new Date(patient.enrollmentAt))} />
         <InfoLine label="入组操作人" value={patient.enrolledBy} />
         {patient.notes ? <InfoLine label="情况说明" value={patient.notes} /> : null}
-        {screening?.latestAnalysis?.result ? (
-          <InfoLine label="AI 预筛结论" value={screening.latestAnalysis.result.summary} />
-        ) : null}
-        {qualification && !qualification.aiAssisted ? (
-          <InfoLine label="AI 预筛" value="没有关联 AI 预筛记录" />
-        ) : null}
       </Card>
       <Card>
-        <Text style={styles.cardHeading}>知情同意与资格核实</Text>
+        <Text style={styles.cardHeading}>患者同意与历史核实记录</Text>
         <InfoLine label="患者选择" value={consent?.decision === 'AGREED' ? '同意参加' : consent?.decision === 'DECLINED' ? '不同意' : consent?.decision === 'NOT_RECORDED' ? '未记录' : '暂无记录'} />
         {consent ? <InfoLine label="记录时间" value={new Date(consent.createdAt).toLocaleString()} /> : null}
         {consent ? <InfoLine label="记录操作人" value={consent.actor} /> : null}
         {consent ? <InfoLine label="证明材料" value={consent.evidencePath ? '已提交加密图片' : '未提交（可选）'} /> : null}
         <View style={styles.infoDivider} />
         <InfoLine label="资格核实" value={qualification?.verified ? '已核实' : qualification ? '有记录，未标记已核实' : '暂无记录'} />
-        {qualification ? <InfoLine label="核实方式" value={qualification.aiAssisted ? '结合 AI 预筛' : '未关联 AI 预筛'} /> : null}
         {qualification ? <InfoLine label="核实人" value={qualification.verifier} /> : null}
         {qualification ? <InfoLine label="核实时间" value={new Date(qualification.createdAt).toLocaleString()} /> : null}
         {qualification?.note ? <InfoLine label="核实说明" value={qualification.note} /> : null}
-      </Card>
-      <Card>
-        <Text style={styles.cardHeading}>AI 预筛审核历史</Text>
-        {analysisHistory.length === 0 ? (
-          <Text style={styles.helperText}>{qualification && !qualification.aiAssisted ? '没有关联 AI 分析记录；资格信息按录入内容保存在档案中。' : '暂无审核记录。'}</Text>
-        ) : analysisHistory.map((run) => (
-          <View key={run.id} style={styles.evidenceItem}>
-            <Text style={styles.evidenceTitle}>{run.result?.verdict === 'ELIGIBLE' ? '初筛通过' : run.result?.verdict === 'INELIGIBLE' ? '明确不符合' : run.result?.verdict === 'MISSING_INFO' ? '资料待补充' : '分析失败'} · {new Date(run.createdAt).toLocaleString()}</Text>
-            <Text style={styles.helperText}>输入版本 {run.inputVersion} · {run.model} · 方案 {run.protocolVersion}</Text>
-            {run.result?.summary ? <Text style={styles.bodyText}>{run.result.summary}</Text> : null}
-            {run.error ? <Text style={styles.helperText}>{run.error}</Text> : null}
-          </View>
-        ))}
       </Card>
       <SectionHeading title="随访计划" />
       {tasks.map((task) => <TaskCard key={task.id} task={task} onPress={() => onOpen({ kind: 'task', id: task.id })} />)}
