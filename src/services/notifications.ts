@@ -1,6 +1,7 @@
 import * as Notifications from 'expo-notifications';
 import { Linking, NativeModules, Platform } from 'react-native';
 import { getTasks } from '../storage/repository';
+import { calendarReminderStatus, syncCalendarFollowups } from './calendarReminders';
 import { dateKey } from '../domain/dates';
 
 const CHANNEL_ID = 'followup-reminders-v4';
@@ -195,6 +196,23 @@ export async function openAppNotificationSettings(): Promise<void> {
 
 export async function refreshLocalReminders(forceReschedule = false): Promise<void> {
   const tasks = await getTasks();
+  // Prefer the user's explicitly selected system calendar. Create/reconcile
+  // Calendar Provider events BEFORE cancelling legacy alarms, so a calendar
+  // failure does not silently leave patients without reminders.
+  if (Platform.OS === 'android' && followupReminderModule) {
+    const calendar = await calendarReminderStatus();
+    if (calendar?.enabled) {
+      await syncCalendarFollowups(tasks);
+      const scheduled = await Notifications.getAllScheduledNotificationsAsync();
+      for (const request of scheduled) {
+        if (request.content.data?.kind === 'followup-reminder') {
+          await Notifications.cancelScheduledNotificationAsync(request.identifier);
+        }
+      }
+      await followupReminderModule.syncReminderDate(null, true);
+      return;
+    }
+  }
   const liveTasks = tasks.filter(
     (task) => task.status !== 'COMPLETED' && task.status !== 'CANCELLED',
   );
