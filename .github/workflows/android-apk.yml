@@ -27,6 +27,9 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
+      - name: Verify preview release notes
+        run: |
+          node -e "const fs=require('fs');const v=JSON.parse(fs.readFileSync('app.json','utf8')).expo.version;const docs=fs.readFileSync('docs/v2-preview.md','utf8');const readme=fs.readFileSync('README.md','utf8');if(!docs.includes('## V'+v+'：')||!readme.includes('V'+v)){throw new Error('Missing README release notes for V'+v)}"
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -57,9 +60,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="v2.0.9-preview.${GITHUB_RUN_NUMBER}"
+          TAG="v2.0.10-preview.${GITHUB_RUN_NUMBER}"
           gh release create "$TAG" dist/yanban-v2-preview.apk \
             --target "${GITHUB_SHA}" \
-            --title "研伴 V2.0.9 Preview ${GITHUB_RUN_NUMBER}" \
+            --title "研伴 V2.0.10 Preview ${GITHUB_RUN_NUMBER}" \
             --notes "自动构建的测试版。尚未完成真实手机的通知、震动和数据库升级验证。升级前请确认已有可靠备份，切勿卸载旧版。" \
             --prerelease
