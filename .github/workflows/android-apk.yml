@@ -60,9 +60,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="v2.0.15-preview.${GITHUB_RUN_NUMBER}"
+          TAG="v2.0.16-preview.${GITHUB_RUN_NUMBER}"
           gh release create "$TAG" dist/yanban-v2-preview.apk \
             --target "${GITHUB_SHA}" \
-            --title "研伴 V2.0.15 Preview ${GITHUB_RUN_NUMBER}" \
-            --notes "本版修改参见仓库 README.md 和 docs/v2-preview.md 的 V2.0.15 记录。横幅、锁屏显示需由用户在系统通知设置中开启。尚未完成真机验证，升级前请备份，切勿卸载旧版。" \
+            --title "研伴 V2.0.16 Preview ${GITHUB_RUN_NUMBER}" \
+            --notes "本版修改参见仓库 README.md 和 docs/v2-preview.md 的 V2.0.16 记录。横幅、锁屏显示需由用户在系统通知设置中开启。尚未完成真机验证，升级前请备份，切勿卸载旧版。" \
             --prerelease
