@@ -93,7 +93,7 @@ class PatientAutoBackupModule(
 
       val initialUri = DocumentsContract.buildTreeDocumentUri(
         "com.android.externalstorage.documents",
-        "primary:Download/_.yanban-patient-followup",
+        "primary:Documents",
       )
       val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
         addFlags(
