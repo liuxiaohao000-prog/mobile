@@ -30,7 +30,7 @@ export default function FollowupCalendarHome({
   const firstWeekday = new Date(year, month, 1).getDay();
   const today = dateKey(now);
 
-  const { pendingByDay, monthTasks, completedCount } = useMemo(() => {
+  const { pendingByDay, completedCount } = useMemo(() => {
     const prefix = `${year}-${String(month + 1).padStart(2, '0')}-`;
     const monthly = tasks.filter(task => task.plannedDate.startsWith(prefix));
     const map = new Map<number, FollowupTask[]>();
@@ -43,7 +43,6 @@ export default function FollowupCalendarHome({
     }
     return {
       pendingByDay: map,
-      monthTasks: monthly,
       completedCount: monthly.filter(task => task.status === 'COMPLETED').length,
     };
   }, [tasks, year, month]);
