@@ -3,7 +3,7 @@ import * as SecureStore from 'expo-secure-store';
 import * as SQLite from 'expo-sqlite';
 import { File, Paths } from 'expo-file-system';
 import { DATABASE_KEY_NAME } from './secureKeys';
-import { restoreAutomaticBackupIfNeeded, startAutomaticBackup } from '../services/automaticBackup';
+import { hasAutomaticBackupAccess, restoreAutomaticBackupIfNeeded, startAutomaticBackup } from '../services/automaticBackup';
 
 const DATABASE_NAME = 'patient-followup.db';
 const DATABASE_DIRECTORY = 'SQLite';
@@ -32,7 +32,11 @@ async function getOrCreateDatabaseKey(): Promise<string> {
 }
 
 async function openDatabase(): Promise<SQLite.SQLiteDatabase> {
-  if (!getDatabaseFile().exists) await restoreAutomaticBackupIfNeeded();
+  // Do not require folder permission to use the local, encrypted database.
+  // Only attempt external recovery when access has already been granted.
+  if (!getDatabaseFile().exists && await hasAutomaticBackupAccess()) {
+    await restoreAutomaticBackupIfNeeded();
+  }
   const database = await SQLite.openDatabaseAsync(DATABASE_NAME, { enableChangeListener: true });
   const cipher = await database.getFirstAsync<{ cipher_version: string }>(
     'PRAGMA cipher_version',
@@ -87,7 +91,8 @@ async function openDatabase(): Promise<SQLite.SQLiteDatabase> {
       await database.execAsync('PRAGMA user_version = 2');
     });
   }
-  startAutomaticBackup(database);
+  // External backups are opt-in. This must not block ordinary app startup.
+  if (await hasAutomaticBackupAccess()) startAutomaticBackup(database);
   return database;
 }
 

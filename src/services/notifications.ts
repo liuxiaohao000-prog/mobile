@@ -1,18 +1,36 @@
 import * as Notifications from 'expo-notifications';
 import { Linking, NativeModules, Platform } from 'react-native';
 import { getTasks } from '../storage/repository';
+import { calendarReminderStatus, syncCalendarFollowups } from './calendarReminders';
 import { dateKey } from '../domain/dates';
 
-const CHANNEL_ID = 'followup-reminders-v3';
-const VIBRATION_PATTERN = [0, 800, 200, 800, 200, 800];
+const CHANNEL_ID = 'followup-reminders-v4';
+const VIBRATION_PATTERN = [0, 600, 250, 600, 350, 600, 250, 600, 350, 600];
 const SCHEDULE_WINDOW_DAYS = 30;
 const MAX_SCHEDULED_REMINDERS = 55;
 export type ReminderDiagnostics = {
   testScheduledAt: number;
+  testFallbackAt: number;
+  testFallbackReceivedAt: number;
+  dailyPlannedAt: number;
+  dailyFallbackAt: number;
+  dailyNotifiedAt: number;
+  dailyCatchupAt: number;
   testTriggeredAt: number;
   highImportance: boolean;
   vibrationEnabled: boolean;
   backgroundRestricted: boolean;
+  notificationsEnabled: boolean;
+  exactAlarmAllowed: boolean;
+  channelImportance: number;
+  channelLockscreenVisibility: number;
+  testNotificationPostedAt: number;
+  testReceiverReceivedAt: number;
+  testServiceEnteredAt: number;
+  batteryOptimizationExempt: boolean;
+  appStandbyBucket: number;
+  testVibrationStartedAt: number;
+  testError: string;
 };
 const followupReminderModule = NativeModules.FollowupReminder as
   | {
@@ -23,6 +41,9 @@ const followupReminderModule = NativeModules.FollowupReminder as
       scheduleTestNotificationInOneMinute: () => Promise<boolean>;
       openNotificationChannelSettings: () => Promise<boolean>;
       openAppNotificationSettings: () => Promise<boolean>;
+      requestBatteryOptimizationExemption: () => Promise<boolean>;
+      openBatteryOptimizationSettings: () => Promise<boolean>;
+      openAppBatterySettings: () => Promise<boolean>;
     }
   | undefined;
 
@@ -51,6 +72,27 @@ export async function configureNotifications(): Promise<void> {
 export async function getReminderDiagnostics(): Promise<ReminderDiagnostics | null> {
   if (Platform.OS !== 'android' || !followupReminderModule) return null;
   return followupReminderModule.getReminderDiagnostics();
+}
+
+export async function requestBatteryOptimizationExemption(): Promise<boolean> {
+  if (Platform.OS !== 'android' || !followupReminderModule) {
+    throw new Error('该授权入口只适用于 Android 原生版。');
+  }
+  return followupReminderModule.requestBatteryOptimizationExemption();
+}
+
+export async function openBatteryOptimizationSettings(): Promise<void> {
+  if (Platform.OS !== 'android' || !followupReminderModule) {
+    throw new Error('仅 Android 原生版支持系统电池优化设置。');
+  }
+  await followupReminderModule.openBatteryOptimizationSettings();
+}
+
+export async function openAppBatterySettings(): Promise<void> {
+  if (Platform.OS !== 'android' || !followupReminderModule) {
+    throw new Error('仅 Android 原生版支持应用设置。');
+  }
+  await followupReminderModule.openAppBatterySettings();
 }
 
 export async function requestNotificationPermission(): Promise<boolean> {
@@ -101,6 +143,14 @@ export async function sendTestNotificationNow(): Promise<boolean> {
 export async function scheduleTestNotificationInOneMinute(): Promise<boolean> {
   const granted = await requestNotificationPermission();
   if (!granted) throw new Error('请先允许系统通知，再进行通知测试。');
+  // A precise 60-second test must not silently degrade into an indefinite
+  // Doze-batched reminder when SCHEDULE_EXACT_ALARM is not granted.
+  if (Platform.OS === 'android' && !(await getExactAlarmPermission())) {
+    await requestExactAlarmPermission();
+    if (!(await getExactAlarmPermission())) {
+      throw new Error('请在系统「闹钟和提醒」页面允许研伴，再回到这里重新安排一分钟测试。');
+    }
+  }
   const scheduled = await Notifications.getAllScheduledNotificationsAsync();
   for (const request of scheduled) {
     if (request.content.data?.kind === 'notification-test') {
@@ -146,6 +196,23 @@ export async function openAppNotificationSettings(): Promise<void> {
 
 export async function refreshLocalReminders(forceReschedule = false): Promise<void> {
   const tasks = await getTasks();
+  // Prefer the user's explicitly selected system calendar. Create/reconcile
+  // Calendar Provider events BEFORE cancelling legacy alarms, so a calendar
+  // failure does not silently leave patients without reminders.
+  if (Platform.OS === 'android' && followupReminderModule) {
+    const calendar = await calendarReminderStatus();
+    if (calendar?.enabled) {
+      await syncCalendarFollowups(tasks);
+      const scheduled = await Notifications.getAllScheduledNotificationsAsync();
+      for (const request of scheduled) {
+        if (request.content.data?.kind === 'followup-reminder') {
+          await Notifications.cancelScheduledNotificationAsync(request.identifier);
+        }
+      }
+      await followupReminderModule.syncReminderDate(null, true);
+      return;
+    }
+  }
   const liveTasks = tasks.filter(
     (task) => task.status !== 'COMPLETED' && task.status !== 'CANCELLED',
   );

@@ -25,12 +25,23 @@ class MainApplication : Application(), ReactApplication {
           // add(MyReactNativePackage())
           add(PatientAutoBackupPackage())
           add(FollowupReminderPackage())
+          add(FollowupMonitorPackage())
         }
     )
   }
 
   override fun onCreate() {
     super.onCreate()
+    // The :followup_guard process must NOT initialize the React Native runtime.
+    // Its foreground service is plain Kotlin and needs only the Android framework.
+    val thisProcess = if (android.os.Build.VERSION.SDK_INT >= 28) {
+      Application.getProcessName()
+    } else {
+      val manager = getSystemService(ACTIVITY_SERVICE) as android.app.ActivityManager
+      manager.runningAppProcesses?.firstOrNull { it.pid == android.os.Process.myPid() }?.processName
+    }
+    if (thisProcess?.endsWith(":followup_guard") == true) return
+
     DefaultNewArchitectureEntryPoint.releaseLevel = try {
       ReleaseLevel.valueOf(BuildConfig.REACT_NATIVE_RELEASE_LEVEL.uppercase())
     } catch (e: IllegalArgumentException) {

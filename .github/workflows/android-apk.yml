@@ -1,0 +1,68 @@
+name: Android APK
+on:
+  push:
+    branches:
+      - main
+      - 'v2/**'
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Typecheck and build APK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - name: Verify preview release notes
+        run: |
+          node -e "const fs=require('fs');const v=JSON.parse(fs.readFileSync('app.json','utf8')).expo.version;const docs=fs.readFileSync('docs/v2-preview.md','utf8');const readme=fs.readFileSync('README.md','utf8');if(!docs.includes('## V'+v+'：')||!readme.includes('V'+v)){throw new Error('Missing README release notes for V'+v)}"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      # ubuntu-24.04 runners already provide Android SDK cmdline-tools;
+      # setup-android@v3 currently tries the removed SDK package 'tools'.
+      - name: Install Android SDK packages
+        run: |
+          "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --channel=3 --install "platforms;android-37.0" "build-tools;36.0.0" "ndk;27.1.12297006"
+          yes | "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --licenses || true
+      - name: Build signed preview APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:assembleRelease --no-daemon --stacktrace -Pandroid.compileSdkVersion=37 -Pandroid.targetSdkVersion=36 -Pandroid.buildToolsVersion=36.0.0
+      - name: Copy APK
+        run: |
+          mkdir -p dist
+          cp android/app/build/outputs/apk/release/app-release.apk dist/yanban-v2-preview.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: yanban-v2-preview-apk
+          path: dist/yanban-v2-preview.apk
+          if-no-files-found: error
+          retention-days: 14
+      - name: Publish GitHub prerelease APK
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/v2/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v2.0.13-preview.${GITHUB_RUN_NUMBER}"
+          gh release create "$TAG" dist/yanban-v2-preview.apk \
+            --target "${GITHUB_SHA}" \
+            --title "研伴 V2.0.13 Preview ${GITHUB_RUN_NUMBER}" \
+            --notes "本版修改参见仓库 README.md 和 docs/v2-preview.md 的 V2.0.13 记录。横幅、锁屏显示需由用户在系统通知设置中开启。尚未完成真机验证，升级前请备份，切勿卸载旧版。" \
+            --prerelease
