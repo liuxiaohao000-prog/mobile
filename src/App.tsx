@@ -24,6 +24,7 @@ import { File, Paths } from 'expo-file-system';
 import { SymbolView } from 'expo-symbols';
 import {
   addExistingPatient,
+  updatePatientDetails,
   recordDeclinedRegistration,
   exitPatient,
   getDashboardSummary,
@@ -50,10 +51,6 @@ import {
 } from './services/automaticBackup';
 import { configureNotifications, refreshLocalReminders } from './services/notifications';
 import {
-  getOperatorName,
-  setOperatorName,
-} from './services/settings';
-import {
   getBackgroundMonitorState,
   setBackgroundMonitorEnabled,
   syncBackgroundMonitorSnapshot,
@@ -65,7 +62,7 @@ import { dateKey, formatLocalDateTime, parseLocalDate, parseLocalDateTime } from
 import { STUDY_PROTOCOL_VERSION } from './config/studyProtocol';
 import { theme, typeScale } from './theme';
 import FollowupCalendarHome from './FollowupCalendarHome';
-import { calendarReminderStatus, requestCalendarAccess, writableCalendars, configureCalendarReminder, preferredWritableCalendars, createCalendarRingingTest, openCalendarRingingTest, type WritableCalendar, type CalendarReminderStatus } from './services/calendarReminders';
+import { calendarReminderStatus, requestCalendarAccess, writableCalendars, configureCalendarReminder, preferredWritableCalendars, createCalendarRingingTest, openCalendarRingingTest, type CalendarReminderStatus } from './services/calendarReminders';
 import {
   EMPTY_CLINICAL_INFO,
   type DashboardSummary,
@@ -575,7 +572,7 @@ async function reconcileAfterPatientMutation(): Promise<string | null> {
   }
 }
 
-function PatientEntryPage({ onOpen, onBack, onRefresh, actor }: BackProps & { actor: string }) {
+function PatientEntryPage({ onOpen, onBack, onRefresh }: BackProps) {
   const [step, setStep] = useState<1 | 2>(1);
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
@@ -620,7 +617,7 @@ function PatientEntryPage({ onOpen, onBack, onRefresh, actor }: BackProps & { ac
       if (agreed && !groupName) throw new Error('请返回第一步选择研究组别。');
       if (!agreed) {
         await recordDeclinedRegistration({
-          name, age: age.trim() ? Number(age) : undefined, gender, notes, actor,
+          name, age: age.trim() ? Number(age) : undefined, gender, notes, actor: '本机',
         });
         await onRefresh();
         Alert.alert('已记录患者不同意', '未创建正式患者，也没有生成随访计划。');
@@ -632,7 +629,7 @@ function PatientEntryPage({ onOpen, onBack, onRefresh, actor }: BackProps & { ac
         name, phone, age: age.trim() ? Number(age) : undefined,
         gender, groupName, enrollmentAt, notes,
         clinical: EMPTY_CLINICAL_INFO,
-        consentDecision: 'AGREED', actor,
+        consentDecision: 'AGREED', actor: '本机',
       });
       setSyncingCalendar(true);
       const calendarError = await reconcileAfterPatientMutation();
@@ -788,15 +785,68 @@ function PatientListPage({ onOpen }: Props) {
   );
 }
 
+function PatientEditForm({ patient, onSaved, onCancel }: {
+  patient: Patient; onSaved: () => Promise<void>; onCancel: () => void;
+}) {
+  const [name, setName] = useState(patient.name);
+  const [phone, setPhone] = useState(patient.phone);
+  const [age, setAge] = useState(patient.age ? String(patient.age) : '');
+  const [gender, setGender] = useState<Gender>(patient.gender);
+  const [notes, setNotes] = useState(patient.notes);
+  const [saving, setSaving] = useState(false);
+
+  const save = async () => {
+    if (saving) return;
+    setSaving(true);
+    let persisted = false;
+    try {
+      await updatePatientDetails({
+        patientId: patient.id,
+        name, phone, age: age.trim() ? Number(age) : 0, gender, notes,
+      });
+      persisted = true;
+      await onSaved();
+      Alert.alert('修改已保存', '患者资料已更新，随访日期和研究分组保持不变。');
+    } catch (error) {
+      Alert.alert(persisted ? '资料已保存，页面刷新失败' : '保存失败',
+        error instanceof Error ? error.message : '请检查后重试。');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return <Card>
+    <FeatureHeading title="编辑患者资料" subtitle="电话、姓名有变化时可修改；随访计划不变"
+      ios="square.and.pencil" android="edit" />
+    <TextField label="姓名" value={name} onChangeText={setName} required />
+    <TextField label="联系电话" value={phone} onChangeText={setPhone} keyboardType="phone-pad" required />
+    <TextField label="年龄（可选）" value={age} onChangeText={setAge} keyboardType="numeric" placeholder="不知道可留空" />
+    <Label tone="ink">性别</Label>
+    <View style={styles.choiceRow}>
+      {(['男','女','其他'] as Gender[]).map(item => (
+        <Pressable key={item} onPress={() => setGender(item)}
+          style={[styles.choice, gender === item && styles.choiceSelected]}>
+          <Text style={[styles.choiceText, gender === item && styles.choiceTextSelected]}>{item}</Text>
+        </Pressable>
+      ))}
+    </View>
+    <TextField label="备注" value={notes} onChangeText={setNotes} multiline placeholder="补充患者资料（可选）" />
+    <Text style={styles.helperText}>为了保护随访计划，入组日期、研究分组和患者编号不能在这里修改。</Text>
+    <PrimaryButton title={saving ? '正在保存…' : '保存患者资料'} loading={saving} disabled={saving}
+      icon={{ ios:'checkmark', android:'save' }} onPress={() => void save()} />
+    <PrimaryButton title="取消修改" secondary disabled={saving} onPress={onCancel} />
+  </Card>;
+}
+
 function PatientDetailPage({
   id,
-  actor,
   onBack,
   onOpen,
   onRefresh,
-}: BackProps & { id: string; actor: string }) {
+}: BackProps & { id: string }) {
   const [patient, setPatient] = useState<Patient>();
   const [exitBusy, setExitBusy] = useState(false);
+  const [editingPatient, setEditingPatient] = useState(false);
   const [tasks, setTasks] = useState<FollowupTask[]>([]);
   const [consent, setConsent] = useState<Awaited<ReturnType<typeof getLatestConsent>>>();
   const [qualification, setQualification] = useState<Awaited<ReturnType<typeof getLatestQualificationVerification>>>();
@@ -826,7 +876,7 @@ function PatientDetailPage({
           setExitBusy(true);
           let exited = false;
           try {
-            await exitPatient(patient.id, '用户手动确认患者退出', actor);
+            await exitPatient(patient.id, '用户手动确认患者退出', '本机');
             exited = true;
             const calendarError = await reconcileAfterPatientMutation();
             await onRefresh();
@@ -857,18 +907,21 @@ function PatientDetailPage({
         <View style={styles.infoDivider} />
         <InfoLine label="联系电话" value={patient.phone} />
         <InfoLine label="入组日期" value={dateKey(parseLocalDate(patient.enrollmentAt) ?? new Date(patient.enrollmentAt))} />
-        <InfoLine label="入组操作人" value={patient.enrolledBy} />
         {patient.notes ? <InfoLine label="情况说明" value={patient.notes} /> : null}
+        <View style={{ height: 10 }} />
+        {!editingPatient ? <PrimaryButton title="编辑患者资料" secondary
+          icon={{ ios: 'square.and.pencil', android: 'edit' }}
+          onPress={() => setEditingPatient(true)} /> : null}
       </Card>
+      {editingPatient ? <PatientEditForm patient={patient} onCancel={() => setEditingPatient(false)}
+        onSaved={async () => { await load(); setEditingPatient(false); await onRefresh(); }} /> : null}
       <Card>
         <Text style={styles.cardHeading}>患者同意与历史核实记录</Text>
         <InfoLine label="患者选择" value={consent?.decision === 'AGREED' ? '同意参加' : consent?.decision === 'DECLINED' ? '不同意' : consent?.decision === 'NOT_RECORDED' ? '未记录' : '暂无记录'} />
         {consent ? <InfoLine label="记录时间" value={new Date(consent.createdAt).toLocaleString()} /> : null}
-        {consent ? <InfoLine label="记录操作人" value={consent.actor} /> : null}
         {consent ? <InfoLine label="证明材料" value={consent.evidencePath ? '已提交加密图片' : '未提交（可选）'} /> : null}
         <View style={styles.infoDivider} />
         <InfoLine label="资格核实" value={qualification?.verified ? '已核实' : qualification ? '有记录，未标记已核实' : '暂无记录'} />
-        {qualification ? <InfoLine label="核实人" value={qualification.verifier} /> : null}
         {qualification ? <InfoLine label="核实时间" value={new Date(qualification.createdAt).toLocaleString()} /> : null}
         {qualification?.note ? <InfoLine label="核实说明" value={qualification.note} /> : null}
       </Card>
@@ -1100,10 +1153,9 @@ function TaskDetailPage({
 
 function FollowupRecordPage({
   id,
-  actor,
   onBack,
   onRefresh,
-}: BackProps & { id: string; actor: string }) {
+}: BackProps & { id: string }) {
   const [contactedAt, setContactedAt] = useState(formatLocalDateTime(new Date()));
   const [result, setResult] = useState('已接通');
   const [completed, setCompleted] = useState(false);
@@ -1125,7 +1177,7 @@ function FollowupRecordPage({
         completed,
         condition,
         notes,
-        actor,
+        actor: '本机',
       });
       const calendarError = completed ? await reconcileAfterPatientMutation() : null;
       await onRefresh();
@@ -1198,12 +1250,8 @@ function SettingsDisclosure({
 }
 
 function SettingsPage({ onRefresh }: Props) {
-  const [actor, setActor] = useState('本机操作人');
-  const [saved, setSaved] = useState(false);
   const [calendarReminder, setCalendarReminder] = useState<CalendarReminderStatus | null>(null);
   const [calendarBusy, setCalendarBusy] = useState(false);
-  const [calendarOptions, setCalendarOptions] = useState<WritableCalendar[]>([]);
-  const [calendarAdvanced, setCalendarAdvanced] = useState(false);
   const [calendarTestCreated, setCalendarTestCreated] = useState(false);
   const [monitorState, setMonitorState] = useState<BackgroundMonitorState>({
     enabled: false, running: false, lastError: '', lastStartedAt: 0,
@@ -1228,10 +1276,8 @@ function SettingsPage({ onRefresh }: Props) {
 
   useEffect(() => {
     void Promise.all([
-      getOperatorName(), getAutomaticBackupDirectoryName(),
-      refreshCalendarStatus(), refreshMonitorStatus(),
-    ]).then(([operator, folder]) => {
-      setActor(operator);
+      getAutomaticBackupDirectoryName(), refreshCalendarStatus(), refreshMonitorStatus(),
+    ]).then(([folder]) => {
       setBackupDirectoryName(folder);
     }).catch(error => console.warn('Settings status refresh failed:', error));
     const subscription = AppState.addEventListener('change', state => {
@@ -1248,50 +1294,29 @@ function SettingsPage({ onRefresh }: Props) {
     setCalendarBusy(true);
     try {
       if (!(await requestCalendarAccess())) {
-        Alert.alert('需要日历权限', '请允许今日随访读取和写入日历，以创建和核对随访日程。');
+        Alert.alert('请允许完整日历权限', '请选择「允许」或「完全允许」。不要选择「只允许创建」，否则无法核对或删除旧随访日程。');
         return;
       }
       const calendars = await writableCalendars();
       const ordinary = preferredWritableCalendars(calendars);
-      setCalendarOptions(ordinary);
       if (!calendars.length) {
         Alert.alert('找不到可写日历', '请先在手机日历中新建一个普通日程或本地日历，然后重试。');
         return;
       }
-      if (calendarReminder?.enabled) {
-        setCalendarAdvanced(true);
-        return;
+      if (!calendarReminder?.enabled) {
+        const selected = ordinary.find(item => item.isLocal) ?? ordinary[0];
+        if (!selected) {
+          Alert.alert('日历还未连接', '手机没有找到可用的普通日历，请先打开系统日历，创建一个日历后重新进入今日随访。');
+          return;
+        }
+        await configureCalendarReminder(selected.id, true);
       }
-      const local = ordinary.find(item => item.isLocal);
-      if (!local) {
-        setCalendarAdvanced(true);
-        Alert.alert('请选择普通日历', '没有发现手机本地日历，请从列表中选择你日常使用的日历。');
-        return;
-      }
-      await configureCalendarReminder(local.id, true);
       await refreshLocalReminders();
       await onRefresh();
       await refreshCalendarStatus();
       Alert.alert('日历提醒已连接', '未来随访日程已核对，上午 09:30 和晚上 19:00 分别通知。');
     } catch (error) {
       Alert.alert('日历设置失败', error instanceof Error ? error.message : '请检查日历权限和账户。');
-    } finally {
-      setCalendarBusy(false);
-    }
-  };
-
-  const chooseCalendar = async (calendar: WritableCalendar) => {
-    if (calendarBusy) return;
-    setCalendarBusy(true);
-    try {
-      await configureCalendarReminder(calendar.id, true);
-      await refreshLocalReminders();
-      await onRefresh();
-      await refreshCalendarStatus();
-      setCalendarAdvanced(false);
-      Alert.alert('已更换日历', '未来随访的 09:30 与 19:00 日程已同步。');
-    } catch (error) {
-      Alert.alert('无法切换日历', error instanceof Error ? error.message : '请检查手机日历设置。');
     } finally {
       setCalendarBusy(false);
     }
@@ -1351,15 +1376,6 @@ function SettingsPage({ onRefresh }: Props) {
     }
   };
 
-  const save = async () => {
-    try {
-      await setOperatorName(actor);
-      setSaved(true);
-    } catch (error) {
-      Alert.alert('保存失败', error instanceof Error ? error.message : '请重试。');
-    }
-  };
-
   // Preserve the original SAF folder picker, automatic backup and restore.
   const changeBackupDirectory = async () => {
     setChangingBackupDirectory(true);
@@ -1393,34 +1409,22 @@ function SettingsPage({ onRefresh }: Props) {
               }]} />
             </View>
             <Text style={styles.helperText}>随访当天会收到两次提示。同一天有多位患者，也只提醒两次。</Text>
+            {!calendarReminder?.permissionGranted || !calendarReminder?.enabled ? (
+              <Text style={styles.calendarPermissionWarning}>授权日历时，请选择「允许」或「完全允许」！不要选「只允许创建」，否则可能无法删除已取消的提醒。</Text>
+            ) : null}
             <Text style={styles.helperText}>状态：{calendarReminder?.enabled
               ? calendarReminder.permissionGranted ? '已连接手机日历' : '日历权限需重新授权'
               : '尚未连接日历'} · 已同步 {calendarReminder?.syncedDates ?? 0} 个日期</Text>
             <Text style={styles.helperText}>不会显示患者姓名。如果用的是云日历，提醒时间可能会同步到你的日历账户。</Text>
             <View style={{ height: 10 }} />
             <PrimaryButton
-              title={calendarBusy ? '正在处理…' : calendarReminder?.enabled ? '更换日历' : '连接手机日历'}
+              title={calendarBusy ? '正在处理…' : calendarReminder?.enabled ? '检查日历连接' : '开启手机日历提醒'}
               icon={{ ios: 'calendar.badge.plus', android: 'event_available' }}
               onPress={() => void connectCalendar()} disabled={calendarBusy} loading={calendarBusy} />
             {calendarReminder?.enabled ? (
               <View style={{ marginTop: 8 }}>
                 <PrimaryButton title="立即同步随访日历" secondary disabled={calendarBusy}
                   onPress={() => void resyncCalendar()} />
-              </View>
-            ) : null}
-            {calendarAdvanced ? (
-              <View style={{ marginTop: 12 }}>
-                <Text style={styles.cardHeading}>选择日历</Text>
-                {calendarOptions.map(item => (
-                  <Pressable key={item.id} accessibilityRole="button" disabled={calendarBusy}
-                    onPress={() => void chooseCalendar(item)}
-                    style={[styles.calendarOptionRow, item.id === calendarReminder?.calendarId && styles.calendarOptionSelected]}>
-                    <Text style={styles.calendarOptionName}>{item.isLocal ? '手机本地日历' : item.name}</Text>
-                    <Text style={styles.helperText}>{item.isLocal ? '推荐 · 本地' : '账户日历 · 可能云同步'}
-                      {item.id === calendarReminder?.calendarId ? ' · 已选' : ''}</Text>
-                  </Pressable>
-                ))}
-                <PrimaryButton title="收起日历列表" secondary onPress={() => setCalendarAdvanced(false)} />
               </View>
             ) : null}
             {calendarReminder?.enabled ? (
@@ -1447,7 +1451,8 @@ function SettingsPage({ onRefresh }: Props) {
         >
           <FeatureHeading title="守护你的数据" subtitle="患者资料加密保存，按原设置自动备份" ios="externaldrive.fill.badge.checkmark" android="verified_user" />
           <Text style={styles.helperText}>第一次选择备份文件夹，以后会自动保存。换手机或重装时，选回原来的文件夹就可以尝试恢复。</Text>
-          <Text style={styles.helperText}>备份目录：{backupDirectoryName ?? '未设置'}</Text>
+          <Text style={styles.helperText}>备份位置：{backupDirectoryName ?? '尚未设置（请尽快选择）'}</Text>
+          <Text style={styles.helperText}>这里显示手机授权的完整文件夹位置；重新安装后，请再次选择这个文件夹来恢复资料。</Text>
           <View style={{ height: 12 }} />
           <PrimaryButton
             title={changingBackupDirectory ? '正在打开文件夹选择器…' : '选择或更改备份文件夹'}
@@ -1456,14 +1461,10 @@ function SettingsPage({ onRefresh }: Props) {
         </SettingsDisclosure>
         <SettingsDisclosure
           title="其他设置"
-          subtitle="操作人 · 顶部监测"
+          subtitle="顶部监测和应用信息"
           expanded={otherDetailsOpen}
           onToggle={() => setOtherDetailsOpen(value => !value)}
         >
-          <FeatureHeading title="操作人" subtitle="登记时自动留下操作记录" ios="person.crop.circle" android="badge" />
-          <TextField label="登记操作人" value={actor} onChangeText={setActor} placeholder="用于本机审计记录" />
-          <View style={{ height: 8 }} />
-          <PrimaryButton title={saved ? '已保存' : '保存操作人'} onPress={() => void save()} secondary />
           {Platform.OS === 'android' ? (
             <View style={{ marginTop: 16 }}>
               <View style={styles.taskTop}>
@@ -1499,7 +1500,7 @@ function SettingsPage({ onRefresh }: Props) {
           expanded={aboutDetailsOpen}
           onToggle={() => setAboutDetailsOpen(value => !value)}
         >
-          <InfoLine label="应用版本" value="2.0.17-preview" />
+          <InfoLine label="应用版本" value="2.0.18-preview" />
           <InfoLine label="研究方案" value={STUDY_PROTOCOL_VERSION} />
           <Text style={styles.helperText}>患者登记为两步流程。正式知情同意与资格审查仍须按研究方案执行。</Text>
         </SettingsDisclosure>
@@ -1530,7 +1531,8 @@ function PermissionGuide({ calendarMissing, calendarAuthorized, notificationMiss
         <Text style={styles.permissionIntro}>这些权限只用于提醒和顶部统计，不会把患者资料发送到外部。</Text>
         {calendarMissing ? <View style={styles.permissionItem}>
           <FeatureHeading title="① 日历提醒" subtitle="有随访任务时，上午 9:30 和晚上 7:00 提醒你" ios="calendar.badge.clock" android="event_available" />
-          <Text style={styles.helperText}>{calendarAuthorized ? '日历已允许访问，点击连接后会优先使用手机本地日历。' : '点下面的按钮，手机会询问是否允许使用日历，请选择「允许」。'}</Text>
+          <Text style={styles.helperText}>{calendarAuthorized ? '已允许访问日历，接下来自动连接手机日历。' : '请在接下来的手机提示中授权日历。'}</Text>
+          <Text style={styles.calendarPermissionWarning}>重要：请选择「允许」或「完全允许」！不要选择「只允许创建」或部分授权，否则可能无法核对、更新或取消随访提醒。</Text>
           <PrimaryButton title={calendarAuthorized ? '连接日历提醒' : '开启日历提醒'} icon={{ ios: 'calendar', android: 'calendar_month' }} loading={busy} disabled={busy} onPress={onCalendar} />
         </View> : null}
         {notificationMissing ? <View style={styles.permissionItem}>
@@ -1546,42 +1548,57 @@ function PermissionGuide({ calendarMissing, calendarAuthorized, notificationMiss
   </Modal>;
 }
 
-function BackupAccessGate({ busy, onRequest, onSkip }: { busy: boolean; onRequest: () => void; onSkip: () => void }) {
+function BackupAccessGate({ busy, onRequest, hasExistingData }: { busy: boolean; onRequest: () => void; hasExistingData: boolean }) {
   return (
     <SafeAreaView style={styles.safe}>
       <StatusBar barStyle="dark-content" />
       <ScrollView contentContainerStyle={styles.pageContent}>
-        <FeatureHeading title="欢迎使用今日随访" subtitle="先确认是否有以前的患者资料" ios="externaldrive.fill.badge.checkmark" android="shield" />
+        <FeatureHeading title="先保护好患者资料" subtitle="只需设置一次，以后自动加密备份" ios="externaldrive.fill.badge.checkmark" android="shield" />
         <View style={styles.pageAccent} />
         <Card>
-          <FeatureHeading title="有旧数据？先找回来" subtitle="换手机或重新安装，请先恢复再登记新患者" ios="arrow.clockwise.icloud" android="restore" />
+          <FeatureHeading title={hasExistingData ? '原有资料需要备份' : '第一次使用？先创建备份文件夹'}
+            subtitle={hasExistingData ? '原来的患者资料仍在手机中，请设置备份位置' : '有旧备份选旧文件夹；没有就新建「今日随访」'}
+            ios="folder.badge.plus" android="create_new_folder" />
+          <Text style={styles.helperText}>资料只保存在你的手机和你选择的文件夹中，不会自动上传。文件采用加密方式保存，请保护手机和备份文件，不要随意分享。</Text>
           <View style={styles.backupStep}>
             <Text style={styles.backupStepNo}>1</Text>
             <View style={{ flex: 1 }}>
-              <Text style={styles.backupStepTitle}>打开备份文件夹</Text>
-              <Text style={styles.helperText}>点击下方按钮，找到之前存放备份的文件夹。</Text>
+              <Text style={styles.backupStepTitle}>打开手机文件夹</Text>
+              <Text style={styles.helperText}>点下面的按钮，手机会打开文件夹选择界面。</Text>
             </View>
           </View>
           <View style={styles.backupStep}>
             <Text style={styles.backupStepNo}>2</Text>
             <View style={{ flex: 1 }}>
-              <Text style={styles.backupStepTitle}>点击「使用此文件夹」</Text>
-              <Text style={styles.helperText}>手机会请你确认授权，选择「允许」即可。</Text>
+              <Text style={styles.backupStepTitle}>没有旧备份就新建「今日随访」</Text>
+              <Text style={styles.helperText}>在「下载」或「Documents／文档」中新建名为「今日随访」的文件夹。若有旧备份，请选择原来的文件夹，不要新建。</Text>
             </View>
           </View>
           <View style={styles.backupStep}>
             <Text style={styles.backupStepNo}>3</Text>
             <View style={{ flex: 1 }}>
-              <Text style={styles.backupStepTitle}>自动查找旧资料</Text>
-              <Text style={styles.helperText}>今日随访会尝试恢复，不需要逐个选择备份文件。</Text>
+              <Text style={styles.backupStepTitle}>授权文件夹，自动保护数据</Text>
+              <Text style={styles.helperText}>进入文件夹后点击「使用此文件夹」和「允许」。有旧备份会尝试恢复，没有旧备份会自动加密保存新资料。</Text>
             </View>
           </View>
-          <PrimaryButton title={busy ? '正在打开文件夹…' : '选择备份文件夹，恢复旧资料'}
-            icon={{ ios: 'folder', android: 'folder_open' }}
+          <Text style={[styles.helperText, { fontWeight: '800', color: theme.primaryDark }]}>推荐 · 用以前的备份找回患者资料</Text>
+          <PrimaryButton title={busy ? '正在打开文件夹…' : '使用已有备份（推荐）'}
+            icon={{ ios: 'arrow.counterclockwise', android: 'restore' }}
             onPress={onRequest} disabled={busy} loading={busy} />
-          <View style={{ height: 10 }} />
-          <PrimaryButton title="第一次使用，没有旧资料" secondary onPress={onSkip} disabled={busy} />
-          <Text style={styles.privacyNote}>没有旧备份可以直接开始。以后可到「我的 → 数据保护」选择文件夹进行自动加密备份。</Text>
+          <View style={{ height: 9 }} />
+          <PrimaryButton title="没有旧备份 · 创建新文件夹" secondary disabled={busy}
+            icon={{ ios: 'folder.badge.plus', android: 'create_new_folder' }}
+            onPress={() => Alert.alert(
+              '请先确认没有旧备份',
+              hasExistingData
+                ? '检测到这台手机已有患者资料！建议先找到以前的备份文件夹，避免旧资料丢失。若只是想给现有资料新建备份目录，也可以继续。\\n\\n新建方法：进入「文档」或「下载」→ 点「新建文件夹」→ 输入「今日随访」→ 进入文件夹 → 选「使用此文件夹」并允许。'
+                : '如果以前安装并使用过「今日随访」或「研伴」，建议优先选择原来的备份文件夹，这样才能尝试恢复旧患者资料。\\n\\n只有确定没有旧备份时才新建：打开「文档」或「下载」→ 点「新建文件夹」→ 输入「今日随访」→ 进入文件夹 → 选「使用此文件夹」并允许。',
+              [
+                { text: '返回找旧备份', style: 'cancel' },
+                { text: '确定新建文件夹', onPress: onRequest },
+              ],
+            )} />
+          <Text style={styles.privacyNote}>请先完成文件夹设置再开始使用，防止资料只存留在 App 内。卸载 App 会删除应用内数据，但你授权的公共备份文件夹通常不会随之删除。</Text>
         </Card>
       </ScrollView>
     </SafeAreaView>
@@ -1612,10 +1629,10 @@ export default function App() {
   const [fatalError, setFatalError] = useState('');
   const [backupAccessGranted, setBackupAccessGranted] = useState<boolean | null>(null);
   const [requestingBackupAccess, setRequestingBackupAccess] = useState(false);
-  const skippedBackupOnboarding = useRef(false);
+  const [hasExistingPatientDatabase, setHasExistingPatientDatabase] = useState(false);
   const [page, setPage] = useState<Route>({ kind: 'tab' });
   const [tab, setTab] = useState<Tab>('home');
-  const [actor, setActor] = useState('本机操作人');
+
   const [summary, setSummary] = useState<DashboardSummary>({ activePatients: 0, dueTasks: 0, overdueTasks: 0 });
   const [tasks, setTasks] = useState<FollowupTask[]>([]);
   const [screenings, setScreenings] = useState<Screening[]>([]);
@@ -1724,17 +1741,15 @@ export default function App() {
   const refresh = useCallback(async (forceReminderReschedule = false) => {
     try {
       setRefreshing(true);
-      const [nextSummary, nextTasks, nextScreenings, operator, contacts] = await Promise.all([
+      const [nextSummary, nextTasks, nextScreenings, contacts] = await Promise.all([
         getDashboardSummary(),
         getTasks(),
         listScreenings(),
-        getOperatorName(),
         listDueFollowupContacts(),
       ]);
       setSummary(nextSummary);
       setTasks(nextTasks);
       setScreenings(nextScreenings);
-      setActor(operator);
       setTodayContacts(contacts);
       if (briefingPendingRef.current) {
         briefingPendingRef.current = false;
@@ -1782,11 +1797,11 @@ export default function App() {
     try {
       const granted = await hasAutomaticBackupAccess();
       const existingDatabase = new File(Paths.document, 'SQLite', 'patient-followup.db').exists;
-      // Existing local data must never be locked out for lack of folder access.
-      // On a fresh installation offer an optional restore choice first.
-      const needsRecoveryChoice = !granted && !existingDatabase && !skippedBackupOnboarding.current;
-      setBackupAccessGranted(!needsRecoveryChoice);
-      if (needsRecoveryChoice) {
+      // A persistent SAF folder is mandatory before clinical data entry.
+      // Existing encrypted DB stays untouched while choosing a folder.
+      setHasExistingPatientDatabase(existingDatabase);
+      setBackupAccessGranted(granted);
+      if (!granted) {
         setReady(false);
         return;
       }
@@ -1809,7 +1824,12 @@ export default function App() {
     try {
       const granted = await requestAutomaticBackupAccess();
       setBackupAccessGranted(granted);
-      if (granted) await checkBackupAccessAndInitialize();
+      if (granted) {
+        await checkBackupAccessAndInitialize();
+        // The database may already be open on an upgrade with no prior
+        // folder; start the backup listener and immediate checkpoint then.
+        startAutomaticBackup(await getDatabase());
+      }
     } catch (error) {
       Alert.alert(
         '备份文件夹未设置',
@@ -1819,12 +1839,6 @@ export default function App() {
       setRequestingBackupAccess(false);
     }
   }, [checkBackupAccessAndInitialize]);
-
-  const skipBackupSetup = useCallback(() => {
-    skippedBackupOnboarding.current = true;
-    setBackupAccessGranted(true);
-    void initializeAfterBackupAccess();
-  }, [initializeAfterBackupAccess]);
 
   useEffect(() => {
     void checkBackupAccessAndInitialize();
@@ -1934,7 +1948,8 @@ export default function App() {
   }
 
   if (!backupAccessGranted) {
-    return <BackupAccessGate busy={requestingBackupAccess} onRequest={enableBackupAccess} onSkip={skipBackupSetup} />;
+    return <BackupAccessGate busy={requestingBackupAccess}
+      hasExistingData={hasExistingPatientDatabase} onRequest={enableBackupAccess} />;
   }
 
   if (!ready) return <SafeAreaView style={styles.safe}><LoadingView label="正在初始化本地加密空间…" /></SafeAreaView>;
@@ -1952,13 +1967,13 @@ export default function App() {
     }
   } else if (page.kind === 'patientEntry' || page.kind === 'existingPatient' || page.kind === 'screening' ||
     page.kind === 'result' || page.kind === 'consent' || page.kind === 'enrollment') {
-    content = <PatientEntryPage actor={actor} onOpen={setPage} onRefresh={refresh} onBack={() => setPage({ kind: 'tab' })} />;
+    content = <PatientEntryPage onOpen={setPage} onRefresh={refresh} onBack={() => setPage({ kind: 'tab' })} />;
   } else if (page.kind === 'patient') {
-    content = <PatientDetailPage id={page.id} actor={actor} onBack={() => setPage({ kind: 'tab' })} onOpen={setPage} onRefresh={refresh} />;
+    content = <PatientDetailPage id={page.id} onBack={() => setPage({ kind: 'tab' })} onOpen={setPage} onRefresh={refresh} />;
   } else if (page.kind === 'task') {
     content = <TaskDetailPage id={page.id} onBack={() => setPage({ kind: 'tab' })} onOpen={setPage} onRefresh={refresh} />;
   } else {
-    content = <FollowupRecordPage id={page.id} actor={actor} onBack={() => setPage({ kind: 'tab' })} onOpen={setPage} onRefresh={refresh} />;
+    content = <FollowupRecordPage id={page.id} onBack={() => setPage({ kind: 'tab' })} onOpen={setPage} onRefresh={refresh} />;
   }
 
   return (
@@ -2006,6 +2021,7 @@ export default function App() {
 
 const styles = StyleSheet.create({
 
+  calendarPermissionWarning: { color: '#B42318', fontWeight: '900', fontSize: 14, lineHeight: 21, marginTop: 9, marginBottom: 7 },
   // Calm healthcare visuals: large touch targets, icon-led cards and plain language.
   featureIcon: { width: 43, height: 43, borderRadius: 14, backgroundColor: '#E5F7F3', alignItems: 'center', justifyContent: 'center', marginRight: 12 },
   featureHeading: { flexDirection: 'row', alignItems: 'center', minHeight: 44, marginVertical: 2 },

@@ -741,6 +741,51 @@ export async function addExistingPatient(input: {
   return patientId;
 }
 
+/**
+ * Edit patient contact details in one transaction. Keep enrollment date,
+ * group, scheduled follow-ups and immutable patient number untouched.
+ * Fingerprint must follow edited name/phone so future duplicate checks work.
+ */
+export async function updatePatientDetails(input: {
+  patientId: string;
+  name: string;
+  phone: string;
+  age: number;
+  gender: Gender;
+  notes: string;
+}): Promise<void> {
+  const name = input.name.trim();
+  const phone = input.phone.trim();
+  if (!name || !phone) throw new Error('请填写姓名和联系电话。');
+  if (name.length > 100 || phone.length > 40 || input.notes.length > 3000)
+    throw new Error('输入内容过长，请检查姓名、电话或备注。');
+  if (!Number.isInteger(input.age) || input.age < 0 || input.age > 130)
+    throw new Error('年龄请输入 0 到 130 之间的整数；不清楚可填 0。');
+  if (!['男', '女', '其他'].includes(input.gender))
+    throw new Error('请选择正确的性别。');
+  const database = await getDatabase();
+  const fingerprint = await patientFingerprint(name, phone);
+  await database.withTransactionAsync(async () => {
+    const original = await database.getFirstAsync<PatientRow>(
+      'SELECT * FROM patient WHERE id = ?', input.patientId);
+    if (!original) throw new Error('找不到患者资料，请返回列表刷新。');
+    const duplicate = await database.getFirstAsync<{ id: string }>(
+      'SELECT id FROM patient WHERE study_id = ? AND identity_fingerprint = ? AND id <> ? LIMIT 1',
+      'LOCAL-STUDY', fingerprint, input.patientId);
+    if (duplicate) throw new DuplicatePatientError();
+    const now = new Date().toISOString();
+    await database.runAsync(
+      'UPDATE patient SET name = ?, phone = ?, age = ?, gender = ?, notes = ?, identity_fingerprint = ? WHERE id = ?',
+      name, phone, input.age, input.gender, input.notes.trim(), fingerprint, input.patientId);
+    await database.runAsync(
+      'UPDATE screening_case SET name = ?, age = ?, gender = ?, updated_at = ? WHERE id = ?',
+      name, input.age, input.gender, now, original.screening_id);
+    await addAudit(database, 'PATIENT_DETAILS_UPDATED', 'patient', input.patientId, '本机', {
+      fields: ['name', 'phone', 'age', 'gender', 'notes'],
+    });
+  });
+}
+
 export async function listPatients(): Promise<Patient[]> {
   const database = await getDatabase();
   const rows = await database.getAllAsync<PatientRow>(
