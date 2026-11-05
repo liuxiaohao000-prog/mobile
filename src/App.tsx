@@ -2001,6 +2001,20 @@ export default function App() {
 
 const styles = StyleSheet.create({
 
+  // Calm healthcare visuals: large touch targets, icon-led cards and plain language.
+  featureIcon: { width: 43, height: 43, borderRadius: 14, backgroundColor: '#E5F7F3', alignItems: 'center', justifyContent: 'center', marginRight: 12 },
+  featureHeading: { flexDirection: 'row', alignItems: 'center', minHeight: 44, marginVertical: 2 },
+  featureHeadingTitle: { fontSize: 18, fontWeight: '800', color: '#103A45', letterSpacing: 0.1 },
+  featureHeadingSubtitle: { fontSize: 12, color: '#6B858C', lineHeight: 18, marginTop: 3 },
+  pageAccent: { width: 44, height: 4, backgroundColor: '#13B8AD', borderRadius: 4, marginTop: -7, marginBottom: 2, marginLeft: 55 },
+  permissionOverlay: { flex: 1, backgroundColor: 'rgba(9,36,44,0.57)', justifyContent: 'center', padding: 20 },
+  permissionPanel: { backgroundColor: '#FFFFFF', borderRadius: 24, padding: 20, maxHeight: '92%', gap: 13, shadowOpacity: 0.2, shadowColor: '#062A30', shadowRadius: 20, elevation: 13 },
+  permissionIntro: { color: '#587781', lineHeight: 20, fontSize: 13 },
+  permissionItem: { borderRadius: 17, backgroundColor: '#F7FBFA', padding: 13, borderColor: '#E0ECEB', borderWidth: 1, gap: 9 },
+  permissionFootnote: { fontSize: 11, color: '#789098', textAlign: 'center', lineHeight: 17 },
+  backupStep: { flexDirection: 'row', gap: 12, paddingVertical: 10, alignItems: 'flex-start', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#DEEAE9' },
+  backupStepNo: { width: 28, height: 28, borderRadius: 14, backgroundColor: '#C8F1E8', overflow: 'hidden', color: '#006F6C', fontWeight: '800', textAlign: 'center', textAlignVertical: 'center', paddingTop: 4 },
+  backupStepTitle: { fontSize: 14, fontWeight: '800', color: '#103A45' },
   // V2.0.11 calendar-first visual system: shared surfaces and navigation.
   // These styles are reused by patient, follow-up, screening, record and settings pages.
   yanbanBottomAccent: { height: 3, width: 28, backgroundColor: '#00A9A6', borderRadius: 2 },
@@ -2082,7 +2096,7 @@ const styles = StyleSheet.create({
   brandMarkText: { color: '#FFFFFF', fontSize: 18, fontWeight: '800' },
   brandName: { color: '#083A45', fontSize: 21, fontWeight: '900', letterSpacing: 1.0 },
   brandCaption: { color: '#66969B', fontSize: 10, fontWeight: '600', marginTop: 1 },
-  pageContent: { paddingHorizontal: 16, paddingTop: 18, paddingBottom: 36, gap: 15 },
+  pageContent: { paddingHorizontal: 17, paddingTop: 20, paddingBottom: 40, gap: 17 },
   hero: { padding: 20, borderRadius: 20, backgroundColor: theme.primarySoft },
   homeTitleBlock: { paddingBottom: 2, gap: 4 },
   homeTitle: { color: theme.ink, fontSize: 28, lineHeight: 36, fontWeight: '700' },
@@ -2098,7 +2112,7 @@ const styles = StyleSheet.create({
   eyebrow: { color: theme.primaryDark, letterSpacing: 0.3, fontSize: 12, fontWeight: '700' },
   heroTitle: { color: theme.ink, ...typeScale.pageTitle, marginTop: 8 },
   heroCopy: { color: theme.muted, fontSize: 16, lineHeight: 24, marginTop: 7, marginBottom: 18 },
-  card: { backgroundColor: theme.paper, borderRadius: 21, padding: 19, borderWidth: 0, shadowColor: '#208C95', shadowOpacity: 0.05, shadowRadius: 12, elevation: 2 },
+  card: { backgroundColor: theme.paper, borderRadius: 21, padding: 18, borderWidth: 1, borderColor: '#ECF2F2', shadowColor: '#217B88', shadowOpacity: 0.06, shadowRadius: 15, shadowOffset: { width: 0, height: 5 }, elevation: 2 },
   entryCard: { padding: 20, minHeight: 190 },
   entryIcon: { width: 48, height: 48, borderRadius: 14, backgroundColor: theme.primarySoft, alignItems: 'center', justifyContent: 'center', marginBottom: 12 },
   entryTitle: { color: theme.ink, fontSize: 18, lineHeight: 25, fontWeight: '600' },
@@ -2147,8 +2161,8 @@ const styles = StyleSheet.create({
   calendarDayText: { color: theme.ink, fontSize: 14, fontWeight: '600' },
   calendarDayTextSelected: { color: '#FFFFFF', fontWeight: '700' },
   calendarHint: { color: theme.muted, fontSize: 13, textAlign: 'right', marginTop: 7 },
-  button: { backgroundColor: theme.primary, borderRadius: 15, minHeight: 52, paddingHorizontal: 16, alignItems: 'center', justifyContent: 'center' },
-  buttonSecondary: { backgroundColor: theme.primarySoft },
+  button: { backgroundColor: theme.primary, borderRadius: 16, minHeight: 52, paddingHorizontal: 16, alignItems: 'center', justifyContent: 'center', shadowColor: '#108B87', shadowOpacity: 0.12, shadowRadius: 8, elevation: 1 },
+  buttonSecondary: { backgroundColor: '#E6F8F4', shadowOpacity: 0, elevation: 0 },
   buttonDanger: { backgroundColor: theme.danger },
   buttonDisabled: { opacity: 0.55 },
   buttonContent: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
