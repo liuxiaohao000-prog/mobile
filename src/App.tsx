@@ -25,6 +25,7 @@ import * as Notifications from 'expo-notifications';
 import { SymbolView } from 'expo-symbols';
 import {
   addExistingPatient,
+  recordDeclinedRegistration,
   beginAnalysis,
   closeScreening,
   createScreening,
@@ -85,11 +86,8 @@ import {
   type ReminderDiagnostics,
 } from './services/notifications';
 import {
-  getAiSettings,
   getOperatorName,
-  saveAiSettings,
   setOperatorName,
-  type AiSettings,
 } from './services/settings';
 import {
   getBackgroundMonitorState,
@@ -611,31 +609,131 @@ function HomePage({
   );
 }
 
-function PatientEntryPage({ onOpen, onBack }: BackProps) {
+function PatientEntryPage({ onOpen, onBack, onRefresh, actor }: BackProps & { actor: string }) {
+  const [step, setStep] = useState<1 | 2>(1);
+  const [name, setName] = useState('');
+  const [phone, setPhone] = useState('');
+  const [age, setAge] = useState('');
+  const [gender, setGender] = useState<Gender>('其他');
+  const [groupName, setGroupName] = useState<'用药组' | '不用药组'>('用药组');
+  const [enrollmentAt, setEnrollmentAt] = useState('');
+  const [notes, setNotes] = useState('');
+  const [busy, setBusy] = useState(false);
+  const locked = useRef(false);
+
+  const next = () => {
+    if (!name.trim() || !phone.trim()) {
+      Alert.alert('请补全基本资料', '患者姓名、联系电话为必填项。');
+      return;
+    }
+    if (phone.replace(/\D/g, '').length < 3) {
+      Alert.alert('电话格式不正确', '请检查患者联系电话。');
+      return;
+    }
+    if (!parseLocalDate(enrollmentAt)) {
+      Alert.alert('请选择入组日期', '请通过日历选择患者入组日期。');
+      return;
+    }
+    if (age.trim() && (!Number.isInteger(Number(age)) || Number(age) < 1 || Number(age) > 130)) {
+      Alert.alert('年龄格式不正确', '年龄为可选项，如填写请输入 1 到 130 的整数。');
+      return;
+    }
+    setStep(2);
+  };
+
+  const finish = async (agreed: boolean) => {
+    if (locked.current) return;
+    locked.current = true;
+    setBusy(true);
+    try {
+      if (!agreed) {
+        await recordDeclinedRegistration({
+          name, age: age.trim() ? Number(age) : undefined, gender, notes, actor,
+        });
+        await onRefresh();
+        Alert.alert('已记录患者不同意', '未创建正式患者，也没有生成随访计划。');
+        onBack();
+        return;
+      }
+      const patientId = await addExistingPatient({
+        name, phone, age: age.trim() ? Number(age) : undefined,
+        gender, groupName, enrollmentAt, notes,
+        clinical: EMPTY_CLINICAL_INFO,
+        consentDecision: 'AGREED', actor,
+      });
+      await onRefresh();
+      onOpen({ kind: 'patient', id: patientId });
+    } catch (error) {
+      if (error instanceof DuplicatePatientError) Alert.alert('患者可能已经存在', error.message);
+      else Alert.alert('无法完成登记', error instanceof Error ? error.message : '请检查资料后重试。');
+    } finally {
+      locked.current = false;
+      setBusy(false);
+    }
+  };
+
   return (
-    <ScrollView contentContainerStyle={styles.pageContent}>
-      <PageHeader title="添加患者" subtitle="请选择患者来源，后续资料会按对应流程保存。" onBack={onBack} />
-      <Pressable accessibilityRole="button" onPress={() => onOpen({ kind: 'screening' })}>
-        <Card style={styles.entryCard}>
-          <View style={styles.entryIcon}>
-            <SymbolView name={{ ios: 'person.badge.plus', android: 'person_add', web: 'person_add' }} size={26} tintColor={theme.primary} />
+    <KeyboardAvoidingView style={styles.fill} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <ScrollView contentContainerStyle={styles.pageContent} keyboardShouldPersistTaps="handled">
+        <PageHeader title={step === 1 ? '入组患者信息登记' : '患者同意确认'}
+          subtitle={step === 1 ? '第 1 步 / 共 2 步 · 集中填写患者资料' : '第 2 步 / 共 2 步 · 同意后直接完成入组'}
+          onBack={step === 1 ? onBack : () => setStep(1)} />
+        <View style={styles.registrationSteps}>
+          <View style={[styles.registrationStep, styles.registrationStepActive]}>
+            <Text style={styles.registrationStepLabel}>01 患者信息</Text>
           </View>
-          <Text style={styles.entryTitle}>新增入组患者</Text>
-          <Text style={styles.bodyText}>从预筛开始，依次完成资料、患者选择和正式资格核实，再生成随访计划。</Text>
-          <Text style={styles.entryAction}>开始新增  ›</Text>
-        </Card>
-      </Pressable>
-      <Pressable accessibilityRole="button" onPress={() => onOpen({ kind: 'existingPatient' })}>
-        <Card style={styles.entryCard}>
-          <View style={[styles.entryIcon, { backgroundColor: theme.successSoft }]}>
-            <SymbolView name={{ ios: 'person.crop.rectangle.stack', android: 'clinical_notes', web: 'clinical_notes' }} size={26} tintColor={theme.success} />
+          <View style={[styles.registrationStep, step === 2 && styles.registrationStepActive]}>
+            <Text style={styles.registrationStepLabel}>02 同意确认</Text>
           </View>
-          <Text style={styles.entryTitle}>添加已经入组患者</Text>
-          <Text style={styles.bodyText}>一次性补录既有患者。只需填写姓名、电话、入组日期和所在组，其余资料均可稍后补充。</Text>
-          <Text style={[styles.entryAction, { color: theme.success }]}>打开补录表单  ›</Text>
-        </Card>
-      </Pressable>
-    </ScrollView>
+        </View>
+        {step === 1 ? (
+          <>
+            <Card>
+              <Text style={styles.cardHeading}>患者信息</Text>
+              <Text style={styles.helperText}>只保留必要资料，其余情况写在备注框里。</Text>
+              <TextField label="姓名 *" value={name} onChangeText={setName} placeholder="患者姓名" />
+              <TextField label="联系电话 *" value={phone} onChangeText={setPhone} keyboardType="phone-pad" placeholder="用于后续电话随访" />
+              <TextField label="年龄（选填）" value={age} onChangeText={setAge} keyboardType="numeric" placeholder="周岁" />
+              <ChoiceRow label="性别（选填）" options={['其他', '男', '女']} value={gender} onChange={setGender} />
+              <ChoiceRow label="研究组别 *" options={['用药组', '不用药组']} value={groupName} onChange={setGroupName} />
+              <EnrollmentDatePicker label="入组日期 *" value={enrollmentAt} onChange={setEnrollmentAt} />
+            </Card>
+            <Card>
+              <Text style={styles.cardHeading}>备注信息（选填）</Text>
+              <Text style={styles.helperText}>临床情况、诊断和其他需要记录的内容都可以写在这里，没有可留空。</Text>
+              <TextInput value={notes} onChangeText={setNotes}
+                accessibilityLabel="患者备注信息"
+                multiline textAlignVertical="top"
+                placeholder="输入需要补充的患者资料、情况说明或备注…"
+                placeholderTextColor={theme.muted}
+                style={[styles.input, styles.registrationNotes]} />
+            </Card>
+            <PrimaryButton title="下一步 · 确认患者同意" onPress={next} disabled={busy} />
+          </>
+        ) : (
+          <>
+            <Card>
+              <Text style={styles.cardHeading}>患者是否同意入组？</Text>
+              <Text style={styles.helperText}>请按照研究流程向患者充分说明相关事项并完成知情同意。这里记录同意结果，不替代正式的知情同意文件。</Text>
+              <View style={styles.infoDivider} />
+              <InfoLine label="姓名" value={name.trim()} />
+              <InfoLine label="联系电话" value={phone.trim()} />
+              <InfoLine label="组别" value={groupName} />
+              <InfoLine label="入组日期" value={enrollmentAt} />
+              {notes.trim() ? <InfoLine label="备注" value={notes.trim()} /> : null}
+            </Card>
+            <PrimaryButton title={busy ? '正在办理入组…' : '患者同意 · 直接完成入组'} onPress={() => { void finish(true); }} disabled={busy} />
+            <PrimaryButton title="患者不同意 · 不创建随访任务" secondary disabled={busy} onPress={() => {
+              Alert.alert('确认患者不同意？', '仅保存不同意记录，不创建患者档案或随访计划。', [
+                { text: '返回', style: 'cancel' },
+                { text: '确认不同意', style: 'destructive', onPress: () => { void finish(false); } },
+              ]);
+            }} />
+            <Text style={styles.privacyNote}>同意后直接创建患者档案和第 1、3、6、12 个月随访，不再填写额外核实页面。</Text>
+          </>
+        )}
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -1350,7 +1448,7 @@ function PatientListPage({ onOpen }: Props) {
       <PrimaryButton title="新增或补录患者" onPress={() => onOpen({ kind: 'patientEntry' })} />
       <TextField label="搜索患者" value={query} onChangeText={setQuery} placeholder="姓名、电话或患者编号" />
       {filtered.length === 0 ? (
-        <EmptyState title={patients.length ? '没有找到匹配记录' : '还没有正式入组患者'} subtitle={patients.length ? '试试患者姓名或编号。' : '完成 AI 预筛、同意和入组后，患者会出现在这里。'} />
+        <EmptyState title={patients.length ? '没有找到匹配记录' : '还没有正式入组患者'} subtitle={patients.length ? '试试患者姓名或编号。' : '完成患者信息登记并确认同意后，患者会出现在这里。'} />
       ) : (
         filtered.map((patient) => (
           <Pressable key={patient.id} onPress={() => onOpen({ kind: 'patient', id: patient.id })}>
@@ -1790,11 +1888,6 @@ function SettingsDisclosure({
 }
 
 function SettingsPage({ onRefresh }: Props) {
-  const [settings, setSettings] = useState<AiSettings>({
-    apiKey: '',
-    baseUrl: 'https://api.openai.com/v1',
-    model: 'gpt-4.1-mini',
-  });
   const [actor, setActor] = useState('本机操作人');
   const [saved, setSaved] = useState(false);
   const [notificationGranted, setNotificationGranted] = useState(false);
@@ -1809,7 +1902,6 @@ function SettingsPage({ onRefresh }: Props) {
   });
   const [monitorBusy, setMonitorBusy] = useState(false);
   const [backupDetailsOpen, setBackupDetailsOpen] = useState(false);
-  const [aiDetailsOpen, setAiDetailsOpen] = useState(false);
   const [operatorDetailsOpen, setOperatorDetailsOpen] = useState(false);
   const [aboutDetailsOpen, setAboutDetailsOpen] = useState(false);
   const [configuringReminders, setConfiguringReminders] = useState(false);
@@ -1849,14 +1941,12 @@ function SettingsPage({ onRefresh }: Props) {
   }, []);
   useEffect(() => {
     Promise.all([
-      getAiSettings(),
       getOperatorName(),
       getAutomaticBackupDirectoryName(),
       refreshNotificationPermissions(),
       refreshMonitorStatus(),
     ])
-      .then(([ai, operator, directoryName]) => {
-        setSettings(ai);
+      .then(([operator, directoryName]) => {
         setActor(operator);
         setBackupDirectoryName(directoryName);
       })
@@ -1869,10 +1959,8 @@ function SettingsPage({ onRefresh }: Props) {
     });
     return () => subscription.remove();
   }, [refreshNotificationPermissions, refreshMonitorStatus]);
-  const change = (key: keyof AiSettings, value: string) => setSettings((current) => ({ ...current, [key]: value }));
   const save = async () => {
     try {
-      await saveAiSettings(settings);
       await setOperatorName(actor);
       setSaved(true);
       setTimeout(() => setSaved(false), 2400);
@@ -2285,19 +2373,6 @@ function SettingsPage({ onRefresh }: Props) {
           />
         </SettingsDisclosure>
         <SettingsDisclosure
-          title="AI 服务"
-          subtitle="预筛辅助分析 · 连接配置"
-          expanded={aiDetailsOpen}
-          onToggle={() => setAiDetailsOpen((value) => !value)}
-        >
-          <Text style={styles.helperText}>心电图与必要临床资料将发送到所选 AI 服务。请确认服务符合项目的数据授权要求。</Text>
-          <TextField label="API Key" value={settings.apiKey} onChangeText={(v) => change('apiKey', v)} placeholder="粘贴 API Key" secureTextEntry autoCapitalize="none" />
-          <TextField label="API Base URL" value={settings.baseUrl} onChangeText={(v) => change('baseUrl', v)} keyboardType="url" autoCapitalize="none" />
-          <TextField label="模型名称" value={settings.model} onChangeText={(v) => change('model', v)} autoCapitalize="none" />
-          <View style={{ height: 12 }} />
-          <PrimaryButton title={saved ? '已保存' : '保存 AI 服务配置'} onPress={() => void save()} />
-        </SettingsDisclosure>
-        <SettingsDisclosure
           title="操作人信息"
           subtitle="本机审计记录的署名"
           expanded={operatorDetailsOpen}
@@ -2646,18 +2721,9 @@ export default function App() {
     } else {
       content = <SettingsPage onOpen={setPage} onRefresh={refresh} />;
     }
-  } else if (page.kind === 'patientEntry') {
-    content = <PatientEntryPage onOpen={setPage} onRefresh={refresh} onBack={() => setPage({ kind: 'tab' })} />;
-  } else if (page.kind === 'existingPatient') {
-    content = <ExistingPatientPage actor={actor} onOpen={setPage} onRefresh={refresh} onBack={() => setPage({ kind: 'patientEntry' })} />;
-  } else if (page.kind === 'screening') {
-    content = <ScreeningPage id={page.id} actor={actor} onBack={() => setPage({ kind: 'tab' })} onAnalyzed={(id) => setPage({ kind: 'result', id })} onSkipped={(id) => setPage({ kind: 'consent', id })} />;
-  } else if (page.kind === 'result') {
-    content = <ResultPage id={page.id} actor={actor} onBack={() => setPage({ kind: 'tab' })} onOpen={setPage} onRefresh={refresh} />;
-  } else if (page.kind === 'consent') {
-    content = <ConsentPage id={page.id} actor={actor} onBack={() => setPage({ kind: 'tab' })} onOpen={setPage} onRefresh={refresh} />;
-  } else if (page.kind === 'enrollment') {
-    content = <EnrollmentPage id={page.id} actor={actor} onBack={() => setPage({ kind: 'tab' })} onOpen={setPage} onRefresh={refresh} />;
+  } else if (page.kind === 'patientEntry' || page.kind === 'existingPatient' || page.kind === 'screening' ||
+    page.kind === 'result' || page.kind === 'consent' || page.kind === 'enrollment') {
+    content = <PatientEntryPage actor={actor} onOpen={setPage} onRefresh={refresh} onBack={() => setPage({ kind: 'tab' })} />;
   } else if (page.kind === 'patient') {
     content = <PatientDetailPage id={page.id} actor={actor} onBack={() => setPage({ kind: 'tab' })} onOpen={setPage} onRefresh={refresh} />;
   } else if (page.kind === 'task') {
@@ -2707,6 +2773,11 @@ const styles = StyleSheet.create({
   // V2.0.11 calendar-first visual system: shared surfaces and navigation.
   // These styles are reused by patient, follow-up, screening, record and settings pages.
   yanbanBottomAccent: { height: 3, width: 28, backgroundColor: '#00A9A6', borderRadius: 2 },
+  registrationSteps: { flexDirection: 'row', gap: 8, marginBottom: 4 },
+  registrationStep: { flex: 1, borderRadius: 13, paddingVertical: 13, alignItems: 'center', backgroundColor: '#E5F1F0' },
+  registrationStepActive: { backgroundColor: '#BDF5EF', borderWidth: 1, borderColor: '#00A8A7' },
+  registrationStepLabel: { fontSize: 13, fontWeight: '800', color: '#065A61' },
+  registrationNotes: { minHeight: 180, paddingTop: 16, textAlignVertical: 'top' },
   briefingOverlay: {
     flex: 1,
     backgroundColor: 'rgba(16, 32, 39, 0.45)',
