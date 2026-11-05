@@ -1515,32 +1515,68 @@ function LoadingView({ label }: { label: string }) {
   );
 }
 
+function PermissionGuide({ calendarMissing, notificationMissing, busy, onCalendar, onMonitor, onDismiss }: {
+  calendarMissing: boolean; notificationMissing: boolean; busy: boolean;
+  onCalendar: () => void; onMonitor: () => void; onDismiss: () => void;
+}) {
+  return <Modal visible transparent animationType="fade" onRequestClose={onDismiss}>
+    <View style={styles.permissionOverlay}>
+      <View style={styles.permissionPanel}>
+        <FeatureHeading title="让今日随访为你做好提醒" subtitle="只需要简单开启一次，已授权的功能不再打扰你" ios="checkmark.shield.fill" android="verified_user" />
+        <Text style={styles.permissionIntro}>这些权限只用于提醒和顶部统计，不会把患者资料发送到外部。</Text>
+        {calendarMissing ? <View style={styles.permissionItem}>
+          <FeatureHeading title="① 日历提醒" subtitle="有随访任务时，上午 9:30 和晚上 7:00 提醒你" ios="calendar.badge.clock" android="event_available" />
+          <Text style={styles.helperText}>点下面的按钮，手机会询问是否允许使用日历，请选择「允许」。</Text>
+          <PrimaryButton title="开启日历提醒" icon={{ ios: 'calendar', android: 'calendar_month' }} loading={busy} disabled={busy} onPress={onCalendar} />
+        </View> : null}
+        {notificationMissing ? <View style={styles.permissionItem}>
+          <FeatureHeading title="② 顶部监测" subtitle="通知栏随时看到待随访和完成情况" ios="bell.badge" android="notifications_active" />
+          <Text style={styles.helperText}>点下面的按钮并允许通知，就能看到一条简洁的统计横幅；不需要时可以在「我的」关闭。</Text>
+          <PrimaryButton title="允许通知并开启监测" icon={{ ios: 'bell', android: 'notifications' }} loading={busy} disabled={busy} onPress={onMonitor} />
+        </View> : null}
+        <PrimaryButton title="稍后再说，先进入应用" secondary disabled={busy} onPress={onDismiss} />
+        <Text style={styles.permissionFootnote}>你可以先使用患者和随访功能。下次进入时，缺少的授权会再次提醒。</Text>
+      </View>
+    </View>
+  </Modal>;
+}
+
 function BackupAccessGate({ busy, onRequest, onSkip }: { busy: boolean; onRequest: () => void; onSkip: () => void }) {
   return (
     <SafeAreaView style={styles.safe}>
       <StatusBar barStyle="dark-content" />
       <ScrollView contentContainerStyle={styles.pageContent}>
-        <PageHeader title="数据恢复（可选）" subtitle="如果你正在换机或重新安装，可以先恢复旧数据。首次使用可以跳过。" />
+        <FeatureHeading title="欢迎使用今日随访" subtitle="先确认是否有以前的患者资料" ios="externaldrive.fill.badge.checkmark" android="shield" />
+        <View style={styles.pageAccent} />
         <Card>
-          <Text style={styles.cardHeading}>目录级授权</Text>
-          <Text style={styles.bodyText}>
-            如果已有研伴旧备份，请先在系统文件夹选择器中选定原备份文件夹。旧版本备份通常位于 Downloads/_.yanban-patient-followup；
-            也可以新建一个文件夹。患者数据库和附件会加密后保存，备份仅用于本机恢复，不会上传。
-          </Text>
-          <Text style={styles.helperText}>
-            Android 只会把你选定的文件夹及其子目录授权给研伴。建议选择专用文件夹，不要选包含其他无关文件的宽泛目录。
-          </Text>
-          <View style={{ height: 12 }} />
-          <PrimaryButton
-            title={busy ? '正在打开文件夹选择器…' : '选择文件夹并尝试恢复'}
-            onPress={onRequest}
-            disabled={busy}
-          />
+          <FeatureHeading title="有旧数据？先找回来" subtitle="换手机或重新安装，请先恢复再登记新患者" ios="arrow.clockwise.icloud" android="restore" />
+          <View style={styles.backupStep}>
+            <Text style={styles.backupStepNo}>1</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.backupStepTitle}>打开备份文件夹</Text>
+              <Text style={styles.helperText}>点击下方按钮，找到之前存放备份的文件夹。</Text>
+            </View>
+          </View>
+          <View style={styles.backupStep}>
+            <Text style={styles.backupStepNo}>2</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.backupStepTitle}>点击「使用此文件夹」</Text>
+              <Text style={styles.helperText}>手机会请你确认授权，选择「允许」即可。</Text>
+            </View>
+          </View>
+          <View style={styles.backupStep}>
+            <Text style={styles.backupStepNo}>3</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.backupStepTitle}>自动查找旧资料</Text>
+              <Text style={styles.helperText}>今日随访会尝试恢复，不需要逐个选择备份文件。</Text>
+            </View>
+          </View>
+          <PrimaryButton title={busy ? '正在打开文件夹…' : '选择备份文件夹，恢复旧资料'}
+            icon={{ ios: 'folder', android: 'folder_open' }}
+            onPress={onRequest} disabled={busy} loading={busy} />
           <View style={{ height: 10 }} />
-          <PrimaryButton title="没有旧备份，直接开始" onPress={onSkip} secondary disabled={busy} />
-          <Text style={styles.privacyNote}>
-            卸载后 Android 会撤销目录授权。重新安装后，请重新选择同一个文件夹；备份会自动识别，不需要逐个选择文件。
-          </Text>
+          <PrimaryButton title="第一次使用，没有旧资料" secondary onPress={onSkip} disabled={busy} />
+          <Text style={styles.privacyNote}>没有旧备份可以直接开始。以后可到「我的 → 数据保护」选择文件夹进行自动加密备份。</Text>
         </Card>
       </ScrollView>
     </SafeAreaView>
@@ -1581,6 +1617,10 @@ export default function App() {
   const [todayContacts, setTodayContacts] = useState<DueFollowupContact[]>([]);
   const [briefingVisible, setBriefingVisible] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [permissionGuide, setPermissionGuide] = useState<{ calendar: boolean; notification: boolean } | null>(null);
+  const [permissionBusy, setPermissionBusy] = useState(false);
+  const permissionCheckRunning = useRef(false);
+  const permissionLastPrompt = useRef(0);
   // Show on the first unlocked app launch. Re-show on re-entry only if the
   // app has been away for at least two minutes (never on return from dialer).
   const briefingPendingRef = useRef(true);
@@ -1589,6 +1629,92 @@ export default function App() {
   const skipNextResumeBriefingRef = useRef(false);
   const initializationInProgress = useRef(false);
   const initializationComplete = useRef(false);
+
+  // The patient data screen must load first. Inspect permissions without
+  // blocking rendering; Android system permission prompts require user intent.
+  const inspectPermissions = useCallback(async (showGuide = true) => {
+    if (Platform.OS !== 'android' || permissionCheckRunning.current) return;
+    permissionCheckRunning.current = true;
+    try {
+      const status = await calendarReminderStatus();
+      const calendarMissing = !status?.permissionGranted || !status.enabled;
+      const notificationMissing = Number(Platform.Version) >= 33 &&
+        !(await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS));
+      if (showGuide && (calendarMissing || notificationMissing) &&
+        Date.now() - permissionLastPrompt.current > 12000) {
+        permissionLastPrompt.current = Date.now();
+        setPermissionGuide({ calendar: calendarMissing, notification: notificationMissing });
+      } else if (!calendarMissing && !notificationMissing) {
+        setPermissionGuide(null);
+      }
+    } catch (error) {
+      console.warn('Permission review failed:', error);
+    } finally {
+      permissionCheckRunning.current = false;
+    }
+  }, []);
+
+  const dismissPermissionGuide = useCallback(() => {
+    permissionLastPrompt.current = Date.now();
+    setPermissionGuide(null);
+  }, []);
+
+  const grantCalendarFromGuide = async () => {
+    if (permissionBusy) return;
+    setPermissionBusy(true);
+    try {
+      if (!(await requestCalendarAccess())) {
+        Alert.alert('日历还没有开启', '请在手机的应用设置中，找到「今日随访 → 权限 → 日历」，选择「允许」。', [
+          { text: '稍后', style: 'cancel' },
+          { text: '打开手机设置', onPress: () => void Linking.openSettings() },
+        ]);
+        return;
+      }
+      const calendars = preferredWritableCalendars(await writableCalendars());
+      const local = calendars.find(item => item.isLocal);
+      if (!local) {
+        Alert.alert('再完成一步', '已经允许使用日历。请打开「我的 → 日历提醒」，选择你平时使用的日历。');
+        setPermissionGuide(current => current ? { ...current, calendar: false } : null);
+        return;
+      }
+      await configureCalendarReminder(local.id, true);
+      await refreshLocalReminders();
+      setPermissionGuide(current => current ? { ...current, calendar: false } : null);
+    } catch (error) {
+      Alert.alert('日历提醒还没设置好', error instanceof Error ? error.message : '可以到「我的」重新连接日历。');
+    } finally {
+      setPermissionBusy(false);
+    }
+  };
+
+  const grantMonitorFromGuide = async () => {
+    if (permissionBusy) return;
+    setPermissionBusy(true);
+    try {
+      if (Number(Platform.Version) >= 33) {
+        const result = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS);
+        if (result !== PermissionsAndroid.RESULTS.GRANTED) {
+          Alert.alert('还没有打开通知', '请到手机的应用设置中，允许「今日随访」显示通知。', [
+            { text: '稍后', style: 'cancel' },
+            { text: '打开手机设置', onPress: () => void Linking.openSettings() },
+          ]);
+          return;
+        }
+      }
+      // The button explicitly opts in to the optional persistent monitor.
+      await setBackgroundMonitorEnabled(true);
+      await syncBackgroundMonitorSnapshot().catch(() => undefined);
+      setPermissionGuide(current => current ? { ...current, notification: false } : null);
+    } catch (error) {
+      Alert.alert('顶部监测未开启', error instanceof Error ? error.message : '可以稍后到「我的」重试。');
+    } finally {
+      setPermissionBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    if (ready) void inspectPermissions();
+  }, [ready, inspectPermissions]);
 
   const refresh = useCallback(async (forceReminderReschedule = false) => {
     try {
@@ -1732,10 +1858,11 @@ export default function App() {
         }
         skipNextResumeBriefingRef.current = false;
         void checkBackupAccessAndInitialize();
+        if (ready) void inspectPermissions();
       }
     });
     return () => subscription.remove();
-  }, [checkBackupAccessAndInitialize]);
+  }, [checkBackupAccessAndInitialize, ready, inspectPermissions]);
 
   const openTodayBriefing = async () => {
     try {
@@ -1855,12 +1982,19 @@ export default function App() {
       <View style={styles.fill}>{content}</View>
       {page.kind === 'tab' ? <TabBar active={tab} onChange={goTab} /> : null}
       <TodayFollowupDialog
-        visible={briefingVisible}
+        visible={briefingVisible && !permissionGuide}
         contacts={todayContacts}
         onClose={() => setBriefingVisible(false)}
         onDial={(phone) => { void openPatientDialer(phone); }}
         onOpenTask={openBriefingTask}
       />
+      {permissionGuide && (permissionGuide.calendar || permissionGuide.notification) ? (
+        <PermissionGuide calendarMissing={permissionGuide.calendar}
+          notificationMissing={permissionGuide.notification} busy={permissionBusy}
+          onCalendar={() => void grantCalendarFromGuide()}
+          onMonitor={() => void grantMonitorFromGuide()}
+          onDismiss={dismissPermissionGuide} />
+      ) : null}
     </SafeAreaView>
   );
 }
