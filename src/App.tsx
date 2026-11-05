@@ -9,6 +9,7 @@ import {
   Linking,
   Modal,
   Platform,
+  PermissionsAndroid,
   Pressable,
   SafeAreaView,
   ScrollView,
@@ -20,7 +21,6 @@ import {
   View,
 } from 'react-native';
 import { File, Paths } from 'expo-file-system';
-import * as Notifications from 'expo-notifications';
 import { SymbolView } from 'expo-symbols';
 import {
   addExistingPatient,
@@ -48,22 +48,7 @@ import {
   requestAutomaticBackupAccess,
   startAutomaticBackup,
 } from './services/automaticBackup';
-import {
-  configureNotifications,
-  getExactAlarmPermission,
-  getReminderDiagnostics,
-  openAppNotificationSettings,
-  openNotificationChannelSettings,
-  requestBatteryOptimizationExemption,
-  openBatteryOptimizationSettings,
-  openAppBatterySettings,
-  refreshLocalReminders,
-  requestExactAlarmPermission,
-  requestNotificationPermission,
-  scheduleTestNotificationInOneMinute,
-  sendTestNotificationNow,
-  type ReminderDiagnostics,
-} from './services/notifications';
+import { configureNotifications, refreshLocalReminders } from './services/notifications';
 import {
   getOperatorName,
   setOperatorName,
@@ -80,7 +65,7 @@ import { dateKey, formatLocalDateTime, parseLocalDate, parseLocalDateTime } from
 import { STUDY_PROTOCOL_VERSION } from './config/studyProtocol';
 import { theme, typeScale } from './theme';
 import FollowupCalendarHome from './FollowupCalendarHome';
-import { calendarReminderStatus, requestCalendarAccess, writableCalendars, configureCalendarReminder, syncCalendarFollowups, preferredWritableCalendars, createCalendarRingingTest, openCalendarRingingTest, openNextCalendarReminder, type WritableCalendar, type CalendarReminderStatus } from './services/calendarReminders';
+import { calendarReminderStatus, requestCalendarAccess, writableCalendars, configureCalendarReminder, preferredWritableCalendars, createCalendarRingingTest, openCalendarRingingTest, type WritableCalendar, type CalendarReminderStatus } from './services/calendarReminders';
 import {
   EMPTY_CLINICAL_INFO,
   type DashboardSummary,
@@ -1184,11 +1169,11 @@ function SettingsDisclosure({
 function SettingsPage({ onRefresh }: Props) {
   const [actor, setActor] = useState('本机操作人');
   const [saved, setSaved] = useState(false);
-  const [notificationGranted, setNotificationGranted] = useState(false);
-  const [exactAlarmGranted, setExactAlarmGranted] = useState(false);
-  const [reminderDiagnostics, setReminderDiagnostics] = useState<ReminderDiagnostics | null>(null);
-  const [reminderDetailsOpen, setReminderDetailsOpen] = useState(false);
-  const [testFeedback, setTestFeedback] = useState('');
+  const [calendarReminder, setCalendarReminder] = useState<CalendarReminderStatus | null>(null);
+  const [calendarBusy, setCalendarBusy] = useState(false);
+  const [calendarOptions, setCalendarOptions] = useState<WritableCalendar[]>([]);
+  const [calendarAdvanced, setCalendarAdvanced] = useState(false);
+  const [calendarTestCreated, setCalendarTestCreated] = useState(false);
   const [monitorState, setMonitorState] = useState<BackgroundMonitorState>({
     enabled: false, running: false, lastError: '', lastStartedAt: 0,
     lastStoppedAt: 0, lastStartReason: '', lastTaskRemovedAt: 0,
@@ -1196,680 +1181,296 @@ function SettingsPage({ onRefresh }: Props) {
   });
   const [monitorBusy, setMonitorBusy] = useState(false);
   const [backupDetailsOpen, setBackupDetailsOpen] = useState(false);
-  const [operatorDetailsOpen, setOperatorDetailsOpen] = useState(false);
+  const [otherDetailsOpen, setOtherDetailsOpen] = useState(false);
   const [aboutDetailsOpen, setAboutDetailsOpen] = useState(false);
-  const [configuringReminders, setConfiguringReminders] = useState(false);
-  const [calendarReminder, setCalendarReminder] = useState<CalendarReminderStatus | null>(null);
-  const [calendarOptions, setCalendarOptions] = useState<WritableCalendar[]>([]);
-  const [calendarBusy, setCalendarBusy] = useState(false);
-  const [calendarAdvanced, setCalendarAdvanced] = useState(false);
-  const [calendarTestCreated, setCalendarTestCreated] = useState(false);
-  // Only ask for a channel-settings review once per settings-page visit.
-  // Android does not expose a runtime permission to enable heads-up or lock-screen display.
-  const channelReviewPrompted = useRef(false);
   const [backupDirectoryName, setBackupDirectoryName] = useState<string | null>(null);
   const [changingBackupDirectory, setChangingBackupDirectory] = useState(false);
+
   const refreshMonitorStatus = useCallback(async () => {
-    if (Platform.OS === 'android') setMonitorState(await getBackgroundMonitorState());
-  }, []);
-  const toggleMonitor = async (enabled: boolean) => {
-    if (monitorBusy) return;
-    setMonitorBusy(true);
-    try {
-      await setBackgroundMonitorEnabled(enabled);
-      await refreshMonitorStatus();
-      if (enabled) {
-        Alert.alert('后台监测已开启', '通知栏已提供紧凑摘要及可展开的三项随访统计。轻点进入工作台，也可以在通知中结束监测。已启用系统支持的服务恢复机制，但无法保证强行停止后继续运行。');
-      }
-    } catch (error) {
-      Alert.alert('无法切换后台监测', error instanceof Error ? error.message : '请检查通知权限并重试。');
-      await refreshMonitorStatus().catch(() => undefined);
-    } finally {
-      setMonitorBusy(false);
+    if (Platform.OS === 'android') {
+      setMonitorState(await getBackgroundMonitorState());
     }
-  };
-  const refreshCalendarStatus = useCallback(async () => {
-    if (Platform.OS !== 'android') return;
-    const status = await calendarReminderStatus();
-    setCalendarReminder(status);
   }, []);
-  const enableCalendarReminders = async () => {
+  const refreshCalendarStatus = useCallback(async () => {
+    if (Platform.OS === 'android') setCalendarReminder(await calendarReminderStatus());
+  }, []);
+
+  useEffect(() => {
+    void Promise.all([
+      getOperatorName(), getAutomaticBackupDirectoryName(),
+      refreshCalendarStatus(), refreshMonitorStatus(),
+    ]).then(([operator, folder]) => {
+      setActor(operator);
+      setBackupDirectoryName(folder);
+    }).catch(error => console.warn('Settings status refresh failed:', error));
+    const subscription = AppState.addEventListener('change', state => {
+      if (state === 'active') {
+        void refreshCalendarStatus().catch(() => undefined);
+        void refreshMonitorStatus().catch(() => undefined);
+      }
+    });
+    return () => subscription.remove();
+  }, [refreshCalendarStatus, refreshMonitorStatus]);
+
+  const connectCalendar = async () => {
     if (calendarBusy) return;
     setCalendarBusy(true);
     try {
       if (!(await requestCalendarAccess())) {
-        Alert.alert('需要日历权限', '请允许日历读取和写入，研伴才能创建及核对随访日程。拒绝权限不会影响患者登记。');
-        await refreshCalendarStatus();
+        Alert.alert('需要日历权限', '请允许今日随访读取和写入日历，以创建和核对随访日程。');
         return;
       }
       const calendars = await writableCalendars();
       const ordinary = preferredWritableCalendars(calendars);
-      setCalendarOptions(calendars);
-      await refreshCalendarStatus();
+      setCalendarOptions(ordinary);
       if (!calendars.length) {
-        Alert.alert('没有可写日历', '请先打开手机日历，创建并保存一条普通日程，再返回研伴重试。');
-      } else if (calendarReminder?.enabled) {
+        Alert.alert('找不到可写日历', '请先在手机日历中新建一个普通日程或本地日历，然后重试。');
+        return;
+      }
+      if (calendarReminder?.enabled) {
         setCalendarAdvanced(true);
-      } else {
-        const local = ordinary.find(item => item.isLocal);
-        if (local) {
-          // Prefer the ordinary phone-local calendar without exposing provider
-          // account identifiers or special birthday/countdown calendars.
-          await configureCalendarReminder(local.id, true);
-          await syncCalendarFollowups(await getTasks());
-          await onRefresh(true);
-          setCalendarReminder(await calendarReminderStatus());
-          setCalendarAdvanced(false);
-          Alert.alert('已连接手机本地日历', '已同步未来随访日程。请继续点击“测试日历响铃”，检查手机日历的响铃提醒开关。');
-        } else {
-          setCalendarAdvanced(true);
-          Alert.alert('请选择普通日历', '没有识别到手机本地日历。请选择日常使用的普通日历，避免生日或其他应用的专用日历。');
+        return;
+      }
+      const local = ordinary.find(item => item.isLocal);
+      if (!local) {
+        setCalendarAdvanced(true);
+        Alert.alert('请选择普通日历', '没有发现手机本地日历，请从列表中选择你日常使用的日历。');
+        return;
+      }
+      await configureCalendarReminder(local.id, true);
+      await refreshLocalReminders();
+      await onRefresh();
+      await refreshCalendarStatus();
+      Alert.alert('日历提醒已连接', '未来随访日程已核对，上午 09:30 和晚上 19:00 分别通知。');
+    } catch (error) {
+      Alert.alert('日历设置失败', error instanceof Error ? error.message : '请检查日历权限和账户。');
+    } finally {
+      setCalendarBusy(false);
+    }
+  };
+
+  const chooseCalendar = async (calendar: WritableCalendar) => {
+    if (calendarBusy) return;
+    setCalendarBusy(true);
+    try {
+      await configureCalendarReminder(calendar.id, true);
+      await refreshLocalReminders();
+      await onRefresh();
+      await refreshCalendarStatus();
+      setCalendarAdvanced(false);
+      Alert.alert('已更换日历', '未来随访的 09:30 与 19:00 日程已同步。');
+    } catch (error) {
+      Alert.alert('无法切换日历', error instanceof Error ? error.message : '请检查手机日历设置。');
+    } finally {
+      setCalendarBusy(false);
+    }
+  };
+
+  const resyncCalendar = async () => {
+    if (calendarBusy) return;
+    setCalendarBusy(true);
+    try {
+      await refreshLocalReminders();
+      await onRefresh();
+      await refreshCalendarStatus();
+      Alert.alert('日历核对完成', '已按全部有效待随访任务核对并修复未来提醒。');
+    } catch (error) {
+      Alert.alert('日历同步失败', error instanceof Error ? error.message : '请检查系统日历权限。');
+    } finally {
+      setCalendarBusy(false);
+    }
+  };
+
+  const testCalendar = async () => {
+    if (calendarBusy) return;
+    setCalendarBusy(true);
+    try {
+      await createCalendarRingingTest();
+      setCalendarTestCreated(true);
+      Alert.alert('测试日程已创建', '约两分钟后提醒。可打开手机日历确认通知方式和响铃设置。', [
+        { text: '知道了' },
+        { text: '打开测试日程', onPress: () => void openCalendarRingingTest().catch(() => undefined) },
+      ]);
+    } catch (error) {
+      Alert.alert('无法创建测试日程', error instanceof Error ? error.message : '请检查日历权限。');
+    } finally {
+      setCalendarBusy(false);
+    }
+  };
+
+  const toggleMonitor = async (enabled: boolean) => {
+    if (monitorBusy) return;
+    setMonitorBusy(true);
+    try {
+      if (enabled && Platform.OS === 'android' && Number(Platform.Version) >= 33) {
+        const granted = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS,
+        );
+        if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+          Alert.alert('监测通知未授权', '请允许今日随访发送监测通知，才能在顶部持续展示统计横幅。');
+          return;
         }
       }
+      await setBackgroundMonitorEnabled(enabled);
+      await refreshMonitorStatus();
     } catch (error) {
-      Alert.alert('无法读取手机日历', error instanceof Error ? error.message : '请检查系统日历权限。');
+      Alert.alert('监测设置失败', error instanceof Error ? error.message : '请检查系统通知设置。');
     } finally {
-      setCalendarBusy(false);
+      setMonitorBusy(false);
     }
   };
-  const selectCalendarReminder = async (calendar: WritableCalendar) => {
-    if (calendarBusy) return;
-    setCalendarBusy(true);
-    try {
-      const next = await configureCalendarReminder(calendar.id, true);
-      setCalendarReminder(next);
-      // Surface sync failure to the user. The existing native alarm is not
-      // cancelled until the Calendar Provider write succeeds.
-      await syncCalendarFollowups(await getTasks());
-      await refreshLocalReminders(true);
-      await onRefresh(true);
-      setCalendarReminder(await calendarReminderStatus());
-      setCalendarAdvanced(false);
-      Alert.alert('日历提醒已开启', '研伴已向所选日历写入未来随访日期。每天 09:30、19:00 各一条提醒，不包含患者信息和数量。请另外确认该日历应用的通知和锁屏提醒设置。');
-    } catch (error) {
-      Alert.alert('日历同步未成功', error instanceof Error ? error.message : '请返回检查权限和日历账户。');
-    } finally {
-      setCalendarBusy(false);
-    }
-  };
-  const disableCalendarReminders = async () => {
-    if (calendarBusy) return;
-    setCalendarBusy(true);
-    try {
-      const next = await configureCalendarReminder(null, false);
-      setCalendarReminder(next);
-      setCalendarOptions([]);
-      await refreshLocalReminders(true);
-      await onRefresh(true);
-      Alert.alert('已切回研伴提醒', '已尝试删除研伴创建的未来日历日程，原生提醒重新启用。');
-    } catch (error) {
-      Alert.alert('切换失败', error instanceof Error ? error.message : '请检查日历权限后重试。');
-    } finally {
-      setCalendarBusy(false);
-    }
-  };
-  const refreshNotificationPermissions = useCallback(async () => {
-    const [notification, exactAlarm, diagnostics] = await Promise.all([
-      Notifications.getPermissionsAsync(),
-      getExactAlarmPermission(),
-      getReminderDiagnostics().catch(() => null),
-    ]);
-    setNotificationGranted(notification.granted);
-    setExactAlarmGranted(exactAlarm);
-    setReminderDiagnostics(diagnostics);
-  }, []);
-  useEffect(() => {
-    Promise.all([
-      getOperatorName(),
-      getAutomaticBackupDirectoryName(),
-      refreshNotificationPermissions(),
-      refreshMonitorStatus(),
-      refreshCalendarStatus(),
-    ])
-      .then(([operator, directoryName]) => {
-        setActor(operator);
-        setBackupDirectoryName(directoryName);
-      })
-      .catch(() => undefined);
-    const subscription = AppState.addEventListener('change', (state) => {
-      if (state === 'active') {
-        void refreshNotificationPermissions();
-        void refreshMonitorStatus();
-        void refreshCalendarStatus();
-      }
-    });
-    return () => subscription.remove();
-  }, [refreshNotificationPermissions, refreshMonitorStatus, refreshCalendarStatus]);
+
   const save = async () => {
     try {
       await setOperatorName(actor);
       setSaved(true);
-      setTimeout(() => setSaved(false), 2400);
     } catch (error) {
       Alert.alert('保存失败', error instanceof Error ? error.message : '请重试。');
     }
   };
-  const configureReminders = async () => {
-    if (configuringReminders) return;
-    setConfiguringReminders(true);
-    try {
-      let notificationsAllowed = (await Notifications.getPermissionsAsync()).granted;
-      if (!notificationsAllowed) {
-        notificationsAllowed = await requestNotificationPermission();
-        setNotificationGranted(notificationsAllowed);
-        if (!notificationsAllowed) {
-          Alert.alert('通知尚未开启', '请允许研伴发送通知，随访提醒才能显示在通知栏。', [
-            { text: '稍后', style: 'cancel' },
-            { text: '打开通知设置', onPress: () => void openAppNotifications() },
-          ]);
-          return;
-        }
-      }
 
-      let exactAlarmAllowed = Platform.OS !== 'android' || await getExactAlarmPermission();
-      if (Platform.OS === 'android' && !exactAlarmAllowed) {
-        exactAlarmAllowed = await requestExactAlarmPermission();
-        setExactAlarmGranted(exactAlarmAllowed);
-        if (!exactAlarmAllowed) {
-          Alert.alert('还需开启精确提醒', '请在刚打开的“闹钟和提醒”系统页面中允许研伴，然后返回本页继续配置。');
-          return;
-        }
-      }
-
-      if (Platform.OS === 'android') {
-        const diagnostics = await getReminderDiagnostics().catch(() => null);
-        setReminderDiagnostics(diagnostics);
-        if (!diagnostics) {
-          Alert.alert('需要检查通知渠道', '系统暂时无法读取提醒渠道状态。请打开通知渠道，确认通知、横幅和震动已开启。', [
-            { text: '稍后', style: 'cancel' },
-            { text: '打开通知渠道', onPress: () => void openNotificationSettings() },
-          ]);
-          return;
-        }
-        if (!diagnostics.notificationsEnabled || !diagnostics.highImportance || !diagnostics.vibrationEnabled) {
-          Alert.alert('还需完成通知渠道设置', '请为“患者随访提醒”开启允许通知、横幅（悬浮通知）、锁屏显示与震动，并选择响铃或重要通知。Android 不允许 App 代替你打开这些系统开关。', [
-            { text: '稍后', style: 'cancel' },
-            { text: '打开通知渠道', onPress: () => { channelReviewPrompted.current = true; void openNotificationSettings(); } },
-          ]);
-          return;
-        }
-        if (!channelReviewPrompted.current) {
-          Alert.alert('请确认横幅与锁屏显示', '基础通知权限已经通过。但 Android 的横幅、锁屏展示通常是独立系统设置，无法由研伴自动申请或修改。请进入“患者随访提醒”通知渠道，打开横幅（悬浮通知）、锁屏显示和震动；返回后可重新检查并发送测试通知。', [
-            { text: '稍后', style: 'cancel' },
-            { text: '打开通知渠道', onPress: () => { channelReviewPrompted.current = true; void openNotificationSettings(); } },
-          ]);
-          return;
-        }
-        if (diagnostics.backgroundRestricted) {
-          Alert.alert('系统限制后台提醒', '请将研伴的电池或后台使用设置改为允许。部分一加机型还需开启“自启动/关联启动”。完成后返回本页，再点“继续配置”检查。', [
-            { text: '稍后', style: 'cancel' },
-            { text: '打开应用设置', onPress: () => void openBackgroundSettings() },
-          ]);
-          return;
-        }
-      }
-
-      setNotificationGranted(true);
-      setExactAlarmGranted(exactAlarmAllowed);
-      await onRefresh(true);
-      await refreshNotificationPermissions();
-      Alert.alert(
-        '提醒设置已检查',
-        '通知、精确提醒和可读取的通知渠道设置均已满足。请另外确认系统“横幅/悬浮通知”和“锁屏显示”已开启；这两项设置可能无法由 App 读取。部分手机厂商的自启动设置也需手动允许。',
-      );
-    } catch (error) {
-      Alert.alert('提醒设置未完成', error instanceof Error ? error.message : '请检查系统通知和闹钟设置后重试。');
-    } finally {
-      setConfiguringReminders(false);
-    }
-  };
-  const testNotification = async (delayed: boolean) => {
-    setTestFeedback('');
-    try {
-      if (delayed) {
-        const exactDelivery = await scheduleTestNotificationInOneMinute();
-        await refreshNotificationPermissions();
-        Alert.alert(
-          '测试通知已安排',
-          Platform.OS !== 'android'
-            ? '约 1 分钟后触发。你可以返回桌面等待系统通知。'
-            : exactDelivery
-              ? '已交给系统精确闹钟。请返回桌面或从最近任务划掉 App，再检查通知横幅和五秒震动。系统设置中的「强行停止」不属于该测试。'
-              : '当前没有精确闹钟权限，请先授权后重试。',
-        );
-      } else {
-        const vibrationEnabled = await sendTestNotificationNow();
-        // Do not show a modal Alert here: it can cover the very heads-up
-        // notification the user is trying to test on the foreground screen.
-        setTestFeedback(vibrationEnabled
-          ? '即时测试已发送：请观察顶部横幅与约 5 秒震动。'
-          : '当前提醒渠道的震动被关闭。请打开系统通知渠道启用震动。');
-        await refreshNotificationPermissions();
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : '请检查系统通知权限后重试。';
-      setTestFeedback(message);
-      Alert.alert('通知测试未完成', message);
-    }
-  };
-  const openNotificationSettings = async () => {
-    try {
-      await openNotificationChannelSettings();
-    } catch (error) {
-      Alert.alert('无法打开通知设置', error instanceof Error ? error.message : '请到系统设置中调整研伴通知。');
-    }
-  };
-  const openAppNotifications = async () => {
-    try {
-      await openAppNotificationSettings();
-    } catch (error) {
-      Alert.alert('无法打开通知设置', error instanceof Error ? error.message : '请到系统设置中调整研伴通知。');
-    }
-  };
-  const openBackgroundSettings = async () => {
-    try {
-      await openAppBatterySettings();
-    } catch (error) {
-      Alert.alert('无法打开系统设置', error instanceof Error ? error.message : '请在手机设置中找到研伴的电池或后台运行设置。');
-    }
-  };
-  const requestReliableBackground = () => {
-    Alert.alert(
-      '申请后台提醒运行授权',
-      '通知和精确闹钟权限均已开启，但系统电池优化可能使息屏提醒延迟。你可以自愿允许系统不优化研伴，以改善重要随访提醒的后台送达；并不能保证永久保活。',
-      [
-        { text: '暂不', style: 'cancel' },
-        {
-          text: '打开系统授权',
-          onPress: () => void requestBatteryOptimizationExemption().catch((error) =>
-            Alert.alert('无法打开授权页面', error instanceof Error ? error.message : '请使用下方「系统电池优化列表」手动调整。')),
-        },
-      ],
-    );
-  };
-  const standbyBucketLabel = (bucket?: number) => {
-    switch (bucket) {
-      case 10: return '活跃';
-      case 20: return '工作集';
-      case 30: return '频繁';
-      case 40: return '罕用';
-      case 45: return '受限';
-      case 50: return '从未使用';
-      default: return '未提供';
-    }
-  };
-  const reminderReady = notificationGranted && exactAlarmGranted && (
-    Platform.OS !== 'android' || Boolean(
-      reminderDiagnostics?.highImportance &&
-      reminderDiagnostics.vibrationEnabled &&
-      !reminderDiagnostics.backgroundRestricted,
-    )
-  );
+  // Preserve the original SAF folder picker, automatic backup and restore.
   const changeBackupDirectory = async () => {
     setChangingBackupDirectory(true);
     try {
       const selected = await requestAutomaticBackupAccess();
       if (!selected) return;
       setBackupDirectoryName(await getAutomaticBackupDirectoryName());
-      // Starting the backup observer after an optional permission grant is
-      // essential; a database opened earlier will not re-register itself.
       startAutomaticBackup(await getDatabase());
-      Alert.alert('备份文件夹已更新', '已有自动备份已复制到新文件夹。此文件夹会用于后续自动备份和恢复。');
+      Alert.alert('备份文件夹已更新', '已有自动备份已复制到新文件夹，后续继续按原有方式加密备份。');
     } catch (error) {
       Alert.alert('文件夹设置未完成', error instanceof Error ? error.message : '请重新选择备份文件夹。');
     } finally {
       setChangingBackupDirectory(false);
     }
   };
+
   return (
     <KeyboardAvoidingView style={styles.fill} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView contentContainerStyle={styles.pageContent}>
-        <PageHeader title="我的" subtitle="账户、提醒与本机数据" />
+        <PageHeader title="我的" subtitle="提醒、数据与基本设置" />
         {Platform.OS === 'android' ? (
           <Card>
             <View style={styles.taskTop}>
               <View style={{ flex: 1 }}>
-                <Text style={styles.cardHeading}>手机日历提醒</Text>
-                <Text style={styles.settingsSubtitle}>推荐 · 由日历应用独立提醒</Text>
+                <Text style={styles.cardHeading}>日历提醒</Text>
+                <Text style={styles.settingsSubtitle}>每天 09:30 / 19:00 · 同日任务共享</Text>
               </View>
-              <View style={[styles.reminderStatusDot, { backgroundColor: calendarReminder?.enabled && calendarReminder.permissionGranted ? theme.success : theme.accent }]} />
+              <View style={[styles.reminderStatusDot, {
+                backgroundColor: calendarReminder?.enabled && calendarReminder.permissionGranted
+                  ? theme.success : theme.accent,
+              }]} />
             </View>
-            <Text style={styles.helperText}>同一天共用两条日程：「研伴 · 今日随访提醒」，上午 09:30 与晚上 19:00 通知，不展示患者姓名、电话或数量。未来日程以研伴数据库为准；写入后由手机日历应用负责提醒。</Text>
-            <Text style={styles.helperText}>
-              状态：{calendarReminder?.enabled ? calendarReminder.permissionGranted ? '已开启' : '已开启但日历权限失效' : '尚未开启'}
-              {' · '}已同步日期 {calendarReminder?.syncedDates ?? 0}
-            </Text>
-            <Text style={styles.helperText}>日历账户可能云同步日程标题与时间。建议优先使用手机本地日历。</Text>
+            <Text style={styles.helperText}>状态：{calendarReminder?.enabled
+              ? calendarReminder.permissionGranted ? '已连接手机日历' : '日历权限需重新授权'
+              : '尚未连接日历'} · 已同步 {calendarReminder?.syncedDates ?? 0} 个日期</Text>
+            <Text style={styles.helperText}>提醒由手机日历投递，不包含患者姓名及数量。日历账户可能会同步日程标题和时间。</Text>
             <View style={{ height: 10 }} />
             <PrimaryButton
-              title={calendarBusy ? '正在处理…' : calendarReminder?.enabled ? '更换日历（高级设置）' : '一键开启 · 优先使用本地日历'}
-              disabled={calendarBusy}
-              onPress={() => void enableCalendarReminders()} />
+              title={calendarBusy ? '正在处理…' : calendarReminder?.enabled ? '更换日历' : '连接手机日历'}
+              onPress={() => void connectCalendar()} disabled={calendarBusy} loading={calendarBusy} />
+            {calendarReminder?.enabled ? (
+              <View style={{ marginTop: 8 }}>
+                <PrimaryButton title="立即同步随访日历" secondary disabled={calendarBusy}
+                  onPress={() => void resyncCalendar()} />
+              </View>
+            ) : null}
             {calendarAdvanced ? (
               <View style={{ marginTop: 12 }}>
-                <Text style={styles.cardHeading}>选择用于提醒的日历</Text>
-                <Text style={styles.helperText}>已隐藏生日、纪念日、倒数日等专用日历；只有高级选项会展示技术账户。</Text>
-                {preferredWritableCalendars(calendarOptions).map(calendar => (
-                  <Pressable key={calendar.id} accessibilityRole="button"
-                    onPress={() => void selectCalendarReminder(calendar)} disabled={calendarBusy}
-                    style={[styles.calendarOptionRow, calendar.id === calendarReminder?.calendarId && styles.calendarOptionSelected]}>
-                    <Text style={styles.calendarOptionName}>{calendar.isLocal ? '手机本地日历' : calendar.name}</Text>
-                    <Text style={styles.helperText}>{calendar.isLocal ? '推荐 · 存储在本机' : '账户日历 · 可能同步到云端'}{calendar.id === calendarReminder?.calendarId ? ' · 已选' : ''}</Text>
+                <Text style={styles.cardHeading}>选择日历</Text>
+                {calendarOptions.map(item => (
+                  <Pressable key={item.id} accessibilityRole="button" disabled={calendarBusy}
+                    onPress={() => void chooseCalendar(item)}
+                    style={[styles.calendarOptionRow, item.id === calendarReminder?.calendarId && styles.calendarOptionSelected]}>
+                    <Text style={styles.calendarOptionName}>{item.isLocal ? '手机本地日历' : item.name}</Text>
+                    <Text style={styles.helperText}>{item.isLocal ? '推荐 · 本地' : '账户日历 · 可能云同步'}
+                      {item.id === calendarReminder?.calendarId ? ' · 已选' : ''}</Text>
                   </Pressable>
                 ))}
-                {preferredWritableCalendars(calendarOptions).length === 0 ? (
-                  <Text style={styles.helperText}>没有识别到普通可写日历。请先在手机日历中创建普通日历。</Text>
-                ) : null}
-                <Pressable accessibilityRole="button" onPress={() => setCalendarAdvanced(false)} style={styles.calendarOptionRow}>
-                  <Text style={styles.calendarOptionName}>收起高级设置</Text>
+                <PrimaryButton title="收起日历列表" secondary onPress={() => setCalendarAdvanced(false)} />
+              </View>
+            ) : null}
+            {calendarReminder?.enabled ? (
+              <View style={{ marginTop: 10 }}>
+                <Pressable accessibilityRole="button" onPress={() => void testCalendar()}
+                  style={styles.reminderDisclosure}>
+                  <Text style={styles.reminderDisclosureText}>测试日历通知（可选）</Text>
+                  <SymbolView name={{ ios: 'chevron.right', android: 'chevron_right', web: 'chevron_right' }}
+                    size={18} tintColor={theme.primary} />
                 </Pressable>
-              </View>
-            ) : null}
-            {calendarReminder?.enabled ? (
-              <View style={{ marginTop: 12, gap: 8 }}>
-                <Text style={styles.cardHeading}>响铃设置 · 请务必验证</Text>
-                <Text style={styles.helperText}>研伴已请求系统日历在 09:00 提醒，但 OPPO / 一加日历的“响铃提醒”是独立开关，普通日历接口无法替你强制打开。</Text>
-                <PrimaryButton title={calendarBusy ? '正在创建测试…' : '创建 2 分钟后的日历响铃测试'} disabled={calendarBusy}
-                  onPress={() => {
-                    setCalendarBusy(true);
-                    createCalendarRingingTest()
-                      .then(() => {
-                        setCalendarTestCreated(true);
-                        Alert.alert('日历测试已创建', '约 2 分钟后开始。请立即打开测试日程，手动打开“响铃提醒”开关，然后返回桌面锁屏等待。', [
-                          { text: '稍后', style: 'cancel' },
-                          { text: '打开测试日程', onPress: () => void openCalendarRingingTest().catch(error =>
-                            Alert.alert('无法打开日历', error instanceof Error ? error.message : '请手动打开日历。')) },
-                        ]);
-                      })
-                      .catch(error => Alert.alert('创建测试失败', error instanceof Error ? error.message : '请选择有效日历。'))
-                      .finally(() => setCalendarBusy(false));
-                  }} />
                 {calendarTestCreated ? (
-                  <PrimaryButton title="打开测试日程 · 设置响铃提醒" secondary
-                    onPress={() => void openCalendarRingingTest().catch(error => Alert.alert('无法打开日历', error instanceof Error ? error.message : '请手动打开日历。'))} />
+                  <PrimaryButton title="查看测试日程" secondary
+                    onPress={() => void openCalendarRingingTest().catch(() => undefined)} />
                 ) : null}
-                <PrimaryButton title="打开下一条正式随访日程 · 检查响铃" secondary
-                  onPress={() => void openNextCalendarReminder().then(found => {
-                    if (!found) Alert.alert('暂无未来随访日程', '当前没有已同步的未来日期。可以先创建 2 分钟测试。');
-                  }).catch(error => Alert.alert('无法打开日程', error instanceof Error ? error.message : '请手动打开日历。'))} />
-                <Text style={styles.helperText}>如果测试没有响铃，请检查系统日历 App 的通知、声音、锁屏和该日程的“响铃提醒”开关。不能以“日程已创建”代表响铃成功。</Text>
               </View>
-            ) : null}
-            {calendarReminder?.enabled ? (
-              <>
-                <View style={{ height: 8 }} />
-                <PrimaryButton title={calendarBusy ? '正在处理…' : '立即重新同步日历'} secondary disabled={calendarBusy}
-                  onPress={() => {
-                    setCalendarBusy(true);
-                    refreshLocalReminders(true).then(() => onRefresh(true)).then(() => refreshCalendarStatus())
-                      .then(() => Alert.alert('同步请求已提交', '请检查上方状态和系统日历的未来随访日程。'))
-                      .catch(error => Alert.alert('同步失败', error instanceof Error ? error.message : '请检查权限。'))
-                      .finally(() => setCalendarBusy(false));
-                  }} />
-                <View style={{ height: 8 }} />
-                <PrimaryButton title="关闭日历提醒 · 恢复研伴闹钟" secondary disabled={calendarBusy} onPress={() => {
-                  Alert.alert('切换回研伴闹钟？', '研伴将删除自己创建的日历日程，恢复原生闹钟。', [
-                    { text: '取消', style: 'cancel' },
-                    { text: '切换', onPress: () => void disableCalendarReminders() },
-                  ]);
-                }} />
-              </>
             ) : null}
           </Card>
         ) : null}
-        <Card>
-          <View style={styles.taskTop}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.cardHeading}>原生闹钟（备用 / 测试）</Text>
-              <Text style={styles.settingsSubtitle}>日历提醒未启用时使用</Text>
-            </View>
-            <View style={[styles.reminderStatusDot, { backgroundColor: reminderReady && (Platform.OS !== 'android' || Boolean(reminderDiagnostics?.batteryOptimizationExempt)) ? theme.success : theme.accent }]} />
-          </View>
-          <Text style={[styles.reminderReadinessText, { marginTop: 12 }]}>
-            {!reminderReady ? '基础提醒权限尚未配置完整'
-              : Platform.OS === 'android' && !reminderDiagnostics?.batteryOptimizationExempt
-                ? '提醒权限已开启 · 仍存在电池后台限制风险'
-                : '基础提醒权限已开启'}
-          </Text>
-          <Text style={styles.helperText}>
-            {calendarReminder?.enabled
-              ? '当前正式随访提醒已交给手机日历。本区域仅用于旧版原生闹钟的备用配置与通知测试；日历通知需到日历应用中单独开启。'
-              : '尚未启用日历模式时，正式提醒仍使用研伴原生闹钟。请确认研伴通知渠道、横幅、锁屏和震动已启用。'}
-          </Text>
-          {Platform.OS === 'android' ? (
-            <View style={{ marginTop: 10, marginBottom: 4 }}>
-              <PrimaryButton title="检查横幅、锁屏和震动设置" onPress={() => { channelReviewPrompted.current = true; void openNotificationSettings(); }} secondary />
-            </View>
-          ) : null}
-          <View style={{ height: 14 }} />
-          {!calendarReminder?.enabled ? (
-            <PrimaryButton
-              title={configuringReminders ? '正在检查…' : reminderReady ? '检查原生闹钟' : '开启原生闹钟提醒'}
-              onPress={() => void configureReminders()}
-              disabled={configuringReminders}
-              loading={configuringReminders}
-            />
-          ) : null}
-
-          {Platform.OS === 'android' ? (
-            <View style={{ marginTop: 12, marginBottom: 8 }}>
-              <Text style={styles.cardHeading}>后台运行授权</Text>
-              <Text style={styles.helperText}>
-                电池优化豁免：{reminderDiagnostics?.batteryOptimizationExempt ? '已授权' : '未授权'}
-                {' · '}系统后台限制：{reminderDiagnostics?.backgroundRestricted ? '受限' : '未报告限制'}
-              </Text>
-              {!reminderDiagnostics?.batteryOptimizationExempt ? (
-                <>
-                  <Text style={styles.helperText}>
-                    目前息屏后曾出现延迟提醒。可在这里主动向 Android 申请电池优化豁免，授权与否由你决定。
-                  </Text>
-                  <View style={{ height: 8 }} />
-                  <PrimaryButton title="申请后台提醒运行授权" onPress={requestReliableBackground} />
-                </>
-              ) : (
-                <Text style={styles.helperText}>Android 电池优化豁免已获得；仍可能受到厂商后台及强行停止策略影响。</Text>
-              )}
-              <View style={{ height: 8 }} />
-              <PrimaryButton
-                title="系统电池优化列表"
-                secondary
-                onPress={() => void openBatteryOptimizationSettings().catch((error) =>
-                  Alert.alert('无法打开电池优化设置', error instanceof Error ? error.message : '请在手机设置中进入电池管理。'))}
-              />
-              <View style={{ height: 8 }} />
-              <PrimaryButton title="研伴应用后台设置" secondary onPress={() => void openBackgroundSettings()} />
-              <Text style={styles.helperText}>
-                均使用 Android 标准系统入口，不会静默修改授权；强行停止后仍无法保证本地提醒。
-              </Text>
-            </View>
-          ) : null}
-          {Platform.OS === 'android' ? (
-            <View style={{ marginTop: 14, marginBottom: 6 }}>
-              <View style={styles.taskTop}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.cardHeading}>后台随访监测</Text>
-                  <Text style={styles.settingsSubtitle}>
-                    {monitorState.enabled
-                      ? monitorState.running ? '运行中 · 已启用低功耗守护' : '已开启 · 服务未运行，请查看诊断状态'
-                      : '未开启 · 可自主选择常驻通知'}
-                  </Text>
-                </View>
-                <Switch
-                  value={monitorState.enabled}
-                  disabled={monitorBusy || (!notificationGranted && Number(Platform.Version) < 33)}
-                  onValueChange={(value) => void toggleMonitor(value)}
-                  accessibilityLabel="后台随访监测"
-                />
-              </View>
-              <Text style={styles.helperText}>
-                守护服务现在运行在独立原生进程中；划掉最近任务不会主动停止它。统计仅在数据变化时同步，不联网、不轮询。可单独隐藏监测通知，而不停止后台服务。
-              </Text>
-              {!notificationGranted ? (
-                <Text style={styles.helperText}>通知权限未授权：Android 13+ 的监测服务仍可运行，但正式随访提醒横幅会被屏蔽，请恢复通知权限。</Text>
-              ) : null}
-              {monitorState.lastError ? (
-                <Text style={[styles.helperText, { color: theme.danger }]}>运行异常：{monitorState.lastError}</Text>
-              ) : null}
-              {monitorState.enabled ? (
-                <View style={{ marginTop: 8 }}>
-                  <PrimaryButton
-                    title="监测通知显示设置（可以单独隐藏）"
-                    onPress={() => void openMonitorNotificationSettings().catch((error) =>
-                      Alert.alert('无法打开监测通知设置', error instanceof Error ? error.message : '请手动打开系统通知设置。'))}
-                    secondary
-                  />
-                  <Text style={styles.helperText}>
-                    可以长按监测通知，仅关闭「随访后台监测」渠道的展示，不会主动停止守护服务。不要关闭整个研伴的通知权限，否则正式提醒横幅也会消失。Android 系统的「停止应用」操作仍会终止后台运行。
-                  </Text>
-                </View>
-              ) : null}
-
-              {monitorState.enabled && monitorState.lastStartedAt > 0 ? (
-                <Text style={styles.helperText}>
-                  上次启动：{new Date(monitorState.lastStartedAt).toLocaleString('zh-CN', { hour12: false })}
-                  {' · '}启动记录 {monitorState.startCount} 次
-                </Text>
-              ) : null}
-              {monitorState.enabled && !monitorState.running ? (
-                <Text style={[styles.helperText, { color: theme.danger }]}>
-                  服务当前未运行；系统可能已终止后台服务。请重新进入 App 检查后台通知。
-                </Text>
-              ) : null}
-            </View>
-          ) : null}
-          <Pressable
-            accessibilityRole="button"
-            accessibilityState={{ expanded: reminderDetailsOpen }}
-            onPress={() => setReminderDetailsOpen((value) => !value)}
-            style={styles.reminderDisclosure}
-          >
-            <Text style={styles.reminderDisclosureText}>诊断与测试（高级）</Text>
-            <SymbolView
-              name={{ ios: reminderDetailsOpen ? 'chevron.up' : 'chevron.down', android: reminderDetailsOpen ? 'expand_less' : 'expand_more', web: reminderDetailsOpen ? 'expand_less' : 'expand_more' }}
-              size={20}
-              tintColor={theme.primary}
-            />
-          </Pressable>
-          {reminderDetailsOpen ? (
-            <View style={styles.reminderDetails}>
-              <Text style={styles.helperText}>通知：{notificationGranted ? '已授权' : '未授权'} · 准点提醒：{exactAlarmGranted ? '已授权' : '未授权'}</Text>
-              {Platform.OS === 'android' ? (
-                <>
-                  <Text style={styles.helperText}>
-                    通知级别：{reminderDiagnostics ? reminderDiagnostics.highImportance ? '高' : '需调整' : '未读取'}
-                    {' · '}震动：{reminderDiagnostics ? reminderDiagnostics.vibrationEnabled ? '已开启' : '未开启' : '未读取'}
-                  </Text>
-                  <Text style={styles.helperText}>后台限制：{reminderDiagnostics ? reminderDiagnostics.backgroundRestricted ? '系统已限制' : '未报告限制' : '未知'} · 电池优化豁免：{reminderDiagnostics?.batteryOptimizationExempt ? '已获得' : '未获得'}</Text>
-                  <Text style={styles.helperText}>Android 待机分组：{standbyBucketLabel(reminderDiagnostics?.appStandbyBucket)}（厂商后台策略可能不同）</Text>
-                  <Text style={styles.helperText}>系统通知：{reminderDiagnostics?.notificationsEnabled ? '允许' : '受限'} · 通道重要级别：{reminderDiagnostics?.channelImportance ?? '未知'}（横幅通常需要至少 4）</Text>
-                  <Text style={styles.helperText}>通知渠道锁屏可见性：{reminderDiagnostics ? reminderDiagnostics.channelLockscreenVisibility === 1 ? '公开（渠道请求）' : '受限或隐藏' : '未读取'}。实际锁屏显示还取决于系统全局锁屏通知设置，App 不能代替用户开启。</Text>
-                </>
-              ) : null}
-              {reminderDiagnostics && reminderDiagnostics.testScheduledAt > 0 ? (
-                <Text style={styles.helperText}>
-                  上次延迟测试：{reminderDiagnostics.testServiceEnteredAt > 0 || reminderDiagnostics.testReceiverReceivedAt > 0
-                    ? '原生提醒已执行'
-                    : '系统尚未投递提醒'}
-                  {' · '}通知：{reminderDiagnostics.testNotificationPostedAt > 0 ? '已发布' : '未确认'}
-                  {' · '}震动：{reminderDiagnostics.testVibrationStartedAt > 0 ? '已发起' : '未确认'}
-                </Text>
-              ) : null}
-              {reminderDiagnostics && reminderDiagnostics.testScheduledAt > 0 ? (
-                <>
-                  <Text style={styles.helperText}>系统入口：原生广播 · {reminderDiagnostics.testReceiverReceivedAt > 0 ? "已到达" : "尚无到达记录"}</Text>
-                  <Text style={styles.helperText}>计划触发：{new Date(reminderDiagnostics.testScheduledAt).toLocaleString('zh-CN', { hour12: false })}</Text>
-                  {reminderDiagnostics.testServiceEnteredAt > 0 || reminderDiagnostics.testReceiverReceivedAt > 0 ? (
-                    <Text style={styles.helperText}>
-                      原生入口到达：{new Date(reminderDiagnostics.testServiceEnteredAt > 0
-                        ? reminderDiagnostics.testServiceEnteredAt : reminderDiagnostics.testReceiverReceivedAt).toLocaleString('zh-CN', { hour12: false })}
-                      {' · '}较计划延迟 {Math.max(0, Math.round(((reminderDiagnostics.testServiceEnteredAt > 0
-                        ? reminderDiagnostics.testServiceEnteredAt : reminderDiagnostics.testReceiverReceivedAt) - reminderDiagnostics.testScheduledAt) / 1000))} 秒
-                    </Text>
-                  ) : (
-                    <Text style={styles.helperText}>目标组件尚无到达记录：可能是系统取消或推迟了闹钟，不能仅凭此认定震动执行失败。</Text>
-                  )}
-                </>
-              ) : null}
-              {Platform.OS === 'android' && reminderDiagnostics !== null && reminderDiagnostics.dailyPlannedAt > 0 ? (
-                <Text style={styles.helperText}>
-                  正式随访闹钟：{new Date(reminderDiagnostics.dailyPlannedAt).toLocaleString('zh-CN', { hour12: false })}
-                  {' · '}接收入口：原生广播
-                  {' · '}上次通知确认：{reminderDiagnostics.dailyNotifiedAt > 0
-                    ? new Date(reminderDiagnostics.dailyNotifiedAt).toLocaleString('zh-CN', { hour12: false }) : '暂无'}
-                </Text>
-              ) : null}
-              {Platform.OS === 'android' && monitorState.enabled ? (
-                <>
-                  <Text style={styles.helperText}>后台服务：{monitorState.running ? '运行中' : '未运行'} · {monitorState.lastStartReason || '未记录启动原因'}</Text>
-                  {monitorState.lastTaskRemovedAt > 0 ? (
-                    <Text style={styles.helperText}>最近任务划出记录：{new Date(monitorState.lastTaskRemovedAt).toLocaleString('zh-CN', { hour12: false })}</Text>
-                  ) : null}
-                  {monitorState.lastRestoreAttemptAt > 0 ? (
-                    <Text style={styles.helperText}>系统事件恢复尝试：{new Date(monitorState.lastRestoreAttemptAt).toLocaleString('zh-CN', { hour12: false })}</Text>
-                  ) : null}
-                </>
-              ) : null}
-              {reminderDiagnostics?.testError ? (
-                <Text style={[styles.helperText, { color: theme.danger }]}>上次测试错误：{reminderDiagnostics.testError}</Text>
-              ) : null}
-              {testFeedback ? <Text style={styles.helperText}>{testFeedback}</Text> : null}
-              <Text style={styles.helperText}>V2.0.7 已回退到原生广播直接投递：系统到点启动接收器，先发布通知，再执行最多 5 秒震动；不经由前台服务启动作为首要环节。请验证正常返回桌面与息屏是否恢复准时提醒。</Text>
-              <View style={{ height: 12 }} />
-              <PrimaryButton title="立即测试通知（震动 5 秒）" onPress={() => void testNotification(false)} secondary disabled={!notificationGranted} />
-              <View style={{ height: 8 }} />
-              <PrimaryButton title="一分钟后后台 / 熄屏测试" onPress={() => void testNotification(true)} secondary disabled={!notificationGranted} />
-              <View style={{ height: 8 }} />
-              <PrimaryButton title="刷新本次测试结果" onPress={() => void refreshNotificationPermissions()} secondary />
-              {Platform.OS === 'android' ? (
-                <>
-                  <View style={{ height: 8 }} />
-                  <PrimaryButton title="系统通知渠道" onPress={() => void openNotificationSettings()} secondary />
-                  <View style={{ height: 8 }} />
-                  <PrimaryButton title="设备后台设置" onPress={() => void openBackgroundSettings()} secondary />
-                </>
-              ) : null}
-            </View>
-          ) : null}
-        </Card>
         <SettingsDisclosure
           title="数据与备份"
-          subtitle={backupDirectoryName ? '已选择备份文件夹' : '本机加密保存 · 尚未开启文件夹备份'}
+          subtitle={backupDirectoryName ? '自动加密备份 · 已选择文件夹' : '本机加密保存 · 请手动选择备份文件夹'}
           expanded={backupDetailsOpen}
-          onToggle={() => setBackupDetailsOpen((value) => !value)}
+          onToggle={() => setBackupDetailsOpen(value => !value)}
         >
-          <Text style={styles.helperText}>
-            患者资料保存在本机加密数据库。外部备份需要选择文件夹；恢复旧数据请在首次创建资料前选择原备份文件夹。
-          </Text>
+          <Text style={styles.helperText}>患者资料保存在本机 SQLCipher 加密数据库。外部备份仍由你手动选择文件夹；恢复旧数据请在首次创建资料前选择原备份文件夹。</Text>
           <Text style={styles.helperText}>备份目录：{backupDirectoryName ?? '未设置'}</Text>
           <View style={{ height: 12 }} />
           <PrimaryButton
             title={changingBackupDirectory ? '正在打开文件夹选择器…' : '选择或更改备份文件夹'}
-            onPress={() => void changeBackupDirectory()}
-            disabled={changingBackupDirectory}
-            secondary
-          />
+            onPress={() => void changeBackupDirectory()} disabled={changingBackupDirectory}
+            loading={changingBackupDirectory} secondary />
         </SettingsDisclosure>
         <SettingsDisclosure
-          title="操作人信息"
-          subtitle="本机审计记录的署名"
-          expanded={operatorDetailsOpen}
-          onToggle={() => setOperatorDetailsOpen((value) => !value)}
+          title="其他设置"
+          subtitle="操作人 · 顶部监测"
+          expanded={otherDetailsOpen}
+          onToggle={() => setOtherDetailsOpen(value => !value)}
         >
-          <TextField label="操作人姓名" value={actor} onChangeText={setActor} placeholder="用于本机审计记录" />
-          <View style={{ height: 12 }} />
+          <Text style={styles.cardHeading}>操作人信息</Text>
+          <TextField label="登记操作人" value={actor} onChangeText={setActor} placeholder="用于本机审计记录" />
+          <View style={{ height: 8 }} />
           <PrimaryButton title={saved ? '已保存' : '保存操作人'} onPress={() => void save()} secondary />
+          {Platform.OS === 'android' ? (
+            <View style={{ marginTop: 16 }}>
+              <View style={styles.taskTop}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.cardHeading}>顶部随访监测</Text>
+                  <Text style={styles.settingsSubtitle}>可选 · 仅显示紧凑统计横幅，不负责日历提醒</Text>
+                </View>
+                <Switch value={monitorState.enabled} disabled={monitorBusy}
+                  onValueChange={value => void toggleMonitor(value)}
+                  accessibilityLabel="顶部随访监测" />
+              </View>
+              {monitorState.lastError ? <Text style={[styles.helperText, { color: theme.danger }]}>
+                运行异常：{monitorState.lastError}
+              </Text> : null}
+              {monitorState.enabled && !monitorState.running ? (
+                <Text style={styles.helperText}>监测服务暂未运行；请重新开启或检查系统通知权限。</Text>
+              ) : null}
+              {monitorState.enabled ? (
+                <Pressable accessibilityRole="button"
+                  onPress={() => void openMonitorNotificationSettings().catch(error =>
+                    Alert.alert('无法打开通知设置', error instanceof Error ? error.message : '请打开系统设置。'))}
+                  style={styles.reminderDisclosure}>
+                  <Text style={styles.reminderDisclosureText}>监测横幅通知设置</Text>
+                  <SymbolView name={{ ios: 'chevron.right', android: 'chevron_right', web: 'chevron_right' }}
+                    size={18} tintColor={theme.primary} />
+                </Pressable>
+              ) : null}
+            </View>
+          ) : null}
         </SettingsDisclosure>
         <SettingsDisclosure
-          title="关于研伴"
+          title="关于今日随访"
           subtitle="应用版本与研究方案"
           expanded={aboutDetailsOpen}
-          onToggle={() => setAboutDetailsOpen((value) => !value)}
+          onToggle={() => setAboutDetailsOpen(value => !value)}
         >
-          <InfoLine label="应用版本" value="2.0.15-preview" />
+          <InfoLine label="应用版本" value="2.0.16-preview" />
           <InfoLine label="研究方案" value={STUDY_PROTOCOL_VERSION} />
-          <Text style={styles.helperText}>当前使用两步患者信息登记与同意确认。研究资格核查和正式知情同意仍应按研究方案执行。</Text>
+          <Text style={styles.helperText}>患者登记为两步流程。正式知情同意与资格审查仍须按研究方案执行。</Text>
         </SettingsDisclosure>
-        <Text style={styles.privacyNote}>患者信息保存在本机加密数据库；新入组流程不调用外部 AI 服务。</Text>
+        <Text style={styles.privacyNote}>患者资料仅保存在本机加密数据库。系统日历不会收到患者身份或诊断信息。</Text>
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -1958,7 +1559,6 @@ export default function App() {
   const skipNextResumeBriefingRef = useRef(false);
   const initializationInProgress = useRef(false);
   const initializationComplete = useRef(false);
-  const exactAlarmPermissionRef = useRef<boolean | null>(null);
 
   const refresh = useCallback(async (forceReminderReschedule = false) => {
     try {
@@ -1980,16 +1580,12 @@ export default function App() {
         lastBriefingAtRef.current = Date.now();
         setBriefingVisible(true);
       }
-      const exactAlarmGranted = await getExactAlarmPermission();
-      const permissionChanged = exactAlarmPermissionRef.current !== null
-        && exactAlarmPermissionRef.current !== exactAlarmGranted;
-      // Run calendar reconciliation asynchronously after rendering the data.
-      // Do not delay homepage readiness, app resume or patient navigation.
-      void refreshLocalReminders(forceReminderReschedule || permissionChanged)
-        .catch(reminderError => console.warn('Follow-up reminder sync needs attention:', reminderError));
+      // Calendar reconciliation runs independently of rendering and needs no
+      // app notification / exact-alarm permission.
+      void refreshLocalReminders(forceReminderReschedule)
+        .catch(error => console.warn('Calendar sync needs attention:', error));
       // Event-driven update: never poll the encrypted database from the monitor.
       await syncBackgroundMonitorSnapshot(nextTasks).catch(() => undefined);
-      exactAlarmPermissionRef.current = exactAlarmGranted;
     } catch (error) {
       if (error instanceof Error) setFatalError(error.message);
     } finally {
@@ -2072,15 +1668,6 @@ export default function App() {
   useEffect(() => {
     void checkBackupAccessAndInitialize();
   }, [checkBackupAccessAndInitialize]);
-
-  useEffect(() => {
-    const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
-      if (response.notification.request.content.data?.kind !== 'followup-reminder') return;
-      setTab('followups');
-      setPage({ kind: 'tab' });
-    });
-    return () => subscription.remove();
-  }, []);
 
   useEffect(() => {
     const openFollowups = (url: string | null | undefined) => {
@@ -2220,7 +1807,7 @@ export default function App() {
           <SymbolView name={{ ios: 'calendar.badge.clock', android: 'calendar_month', web: 'calendar_month' }} size={22} tintColor="#FFFFFF" />
         </View>
         <View style={{ flex: 1 }}>
-          <Text style={styles.brandName}>研伴</Text>
+          <Text style={styles.brandName}>今日随访</Text>
           <Text style={styles.brandCaption}>让每一次关怀，都如期而至</Text>
         </View>
         {refreshing ? <ActivityIndicator color={theme.primary} /> : null}
