@@ -36,6 +36,7 @@ internal object FollowupCalendarSync {
   private const val EVENT_MARKER = "YANBAN_FOLLOWUP_REMINDER_V1"
   private const val KEY_TEST_EVENT = "test_event"
   private const val TEST_TITLE = "研伴 · 日历响铃测试"
+  private val REMINDER_TIMES = listOf(LocalTime.of(9, 30), LocalTime.of(19, 0))
 
   private fun prefs(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
   private fun allowed(context: Context): Boolean =
@@ -48,7 +49,9 @@ internal object FollowupCalendarSync {
       putBoolean("enabled", p.getBoolean(KEY_ENABLED, false))
       putString("calendarId", p.getString(KEY_CALENDAR_ID, null))
       putBoolean("permissionGranted", allowed(context))
-      putInt("syncedDates", JSONObject(p.getString(KEY_EVENTS, "{}") ?: "{}").length())
+      val map = JSONObject(p.getString(KEY_EVENTS, "{}") ?: "{}")
+      putInt("syncedDates", map.keys().asSequence().map { it.substringBefore("@") }.toSet().size)
+      putInt("syncedEvents", map.length())
     }
   }
 
@@ -123,19 +126,33 @@ internal object FollowupCalendarSync {
     return status(context)
   }
 
-  // Persisted IDs are Yanban-owned; also verify title/description before editing.
-  private fun isOwned(context: Context, id: Long): Boolean {
+  // Check the event ID recorded by Yanban, as well as the owning calendar,
+  // fixed title/description and expected local event date/time. Never search
+  // by title to determine deletion candidates: user-created copies are safe.
+  private fun isOwned(context: Context, id: Long, expectedCalendar: Long? = null,
+    expectedDate: String? = null, expectedTime: LocalTime? = null): Boolean {
+    val projection = arrayOf(CalendarContract.Events.TITLE,
+      CalendarContract.Events.DESCRIPTION, CalendarContract.Events.CALENDAR_ID,
+      CalendarContract.Events.DTSTART)
     context.contentResolver.query(
       ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI, id),
-      arrayOf(CalendarContract.Events.TITLE, CalendarContract.Events.DESCRIPTION),
-      null, null, null,
+      projection, null, null, null,
     )?.use { cursor ->
-      if (cursor.moveToFirst()) {
-        val title = cursor.getString(0) ?: ""
-        val description = cursor.getString(1) ?: ""
-        return title == EVENT_TITLE &&
-          (description.contains(EVENT_MARKER) || description == EVENT_DESCRIPTION)
+      if (!cursor.moveToFirst()) return false
+      val title = cursor.getString(0) ?: ""
+      val description = cursor.getString(1) ?: ""
+      val calendar = cursor.getLong(2)
+      val startAt = cursor.getLong(3)
+      if (title != EVENT_TITLE) return false
+      if (description != EVENT_DESCRIPTION &&
+        description != EVENT_DESCRIPTION + "\n" + EVENT_MARKER) return false
+      if (expectedCalendar != null && calendar != expectedCalendar) return false
+      if (expectedDate != null || expectedTime != null) {
+        val instant = java.time.Instant.ofEpochMilli(startAt).atZone(ZoneId.systemDefault())
+        if (expectedDate != null && instant.toLocalDate().toString() != expectedDate) return false
+        if (expectedTime != null && instant.toLocalTime().withSecond(0).withNano(0) != expectedTime) return false
       }
+      return true
     }
     return false
   }
@@ -150,22 +167,27 @@ internal object FollowupCalendarSync {
     )
   }
 
-  private fun removeOwned(context: Context, id: Long) {
-    if (isOwned(context, id)) {
-      context.contentResolver.delete(ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI, id), null, null)
-    }
+  private fun removeOwned(context: Context, id: Long, expectedCalendar: Long? = null,
+    expectedDate: String? = null, expectedTime: LocalTime? = null): Boolean {
+    if (!isOwned(context, id, expectedCalendar, expectedDate, expectedTime)) return false
+    return context.contentResolver.delete(
+      ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI, id), null, null) > 0
   }
 
-  private fun removeAllOwned(context: Context, mapping: JSONObject) {
+  private fun removeAllOwned(context: Context, mapping: JSONObject, calendarId: Long? = null) {
     for (key in mapping.keys()) {
       val id = mapping.optLong(key, -1L)
-      if (id > 0) removeOwned(context, id)
+      if (id <= 0) continue
+      val day = key.substringBefore("@")
+      val time = key.substringAfter("@", "")
+      val slot = if (time.isBlank()) LocalTime.of(9, 0) else LocalTime.parse(time)
+      removeOwned(context, id, calendarId, day, slot)
     }
   }
 
-  private fun insert(context: Context, calendarId: Long, day: LocalDate): Long {
+  private fun insert(context: Context, calendarId: Long, day: LocalDate, time: LocalTime): Long {
     val zone = ZoneId.systemDefault()
-    val startAt = LocalDateTime.of(day, LocalTime.of(9, 0)).atZone(zone).toInstant().toEpochMilli()
+    val startAt = LocalDateTime.of(day, time).atZone(zone).toInstant().toEpochMilli()
     val values = ContentValues().apply {
       put(CalendarContract.Events.CALENDAR_ID, calendarId)
       put(CalendarContract.Events.TITLE, EVENT_TITLE)
@@ -266,10 +288,14 @@ internal object FollowupCalendarSync {
   }
 
   /**
-   * Idempotently reconcile each upcoming scheduled date; do not create
-   * retroactive reminders for overdue dates. Current-day 9 AM event is only
-   * created if its time is still in the future.
+   * A single reconciler for enrollment, exit, completion and foreground
+   * repair. Keys: yyyy-MM-dd@HH:mm. V2.0.14 keys (yyyy-MM-dd) refer to the
+   * legacy 09:00 slot and are deleted only after ownership verification.
+   *
+   * Persist every successful operation. Fail closed if an owned event can't
+   * be verified; never delete an unrelated event based on its title alone.
    */
+  @Synchronized
   fun sync(context: Context, dateKeys: List<String>): WritableMap {
     val p = prefs(context)
     if (!p.getBoolean(KEY_ENABLED, false)) return status(context)
@@ -281,25 +307,59 @@ internal object FollowupCalendarSync {
     val now = System.currentTimeMillis()
     val zone = ZoneId.systemDefault()
     val desired = dateKeys.asSequence().map { LocalDate.parse(it) }
-      .filter { LocalDateTime.of(it, LocalTime.of(9, 0)).atZone(zone).toInstant().toEpochMilli() > now }
-      .map { it.toString() }.toSet()
-    val saved = JSONObject(p.getString(KEY_EVENTS, "{}") ?: "{}")
-    val next = JSONObject()
-    for (key in saved.keys()) {
-      val id = saved.optLong(key, -1)
-      if (id > 0 && key in desired && isOwned(context, id)) {
-        next.put(key, id)
-        removeLegacyMarker(context, id)
+      .flatMap { day -> REMINDER_TIMES.asSequence().map { time ->
+        day.toString() + "@" + time.toString() to
+          LocalDateTime.of(day, time).atZone(zone).toInstant().toEpochMilli()
+      }}
+      .filter { it.second > now }.map { it.first }.toSet()
+
+    val mapping = JSONObject(p.getString(KEY_EVENTS, "{}") ?: "{}")
+    fun persist() { p.edit().putString(KEY_EVENTS, mapping.toString()).commit() }
+    // Work only from the private ID registry. Existing 09:00 events are
+    // migrated, including days which now require two new slots.
+    for (key in mapping.keys().asSequence().toList()) {
+      val id = mapping.optLong(key, -1L)
+      val day = key.substringBefore("@")
+      val timeText = key.substringAfter("@", "")
+      val time = if (timeText.isEmpty()) LocalTime.of(9, 0) else LocalTime.parse(timeText)
+      if (id <= 0) {
+        mapping.remove(key)
+        persist()
+        continue
       }
-      else if (id > 0 && key !in desired) removeOwned(context, id)
+      if (key in desired) {
+        if (isOwned(context, id, calendarId, day, time)) {
+          removeLegacyMarker(context, id)
+          continue
+        }
+        // A missing or manually modified event is not safe to delete.
+        // Leave a modified event alone and replace only the correct slot.
+        mapping.remove(key)
+        persist()
+        continue
+      }
+      if (removeOwned(context, id, calendarId, day, time)) {
+        mapping.remove(key)
+        persist()
+      } else {
+        // If it is already absent, remove its stale reference. If it exists
+        // but ownership can't be proven, retain it for manual reconciliation.
+        val exists = context.contentResolver.query(
+          ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI, id),
+          arrayOf(CalendarContract.Events._ID), null, null, null)?.use { it.moveToFirst() } ?: false
+        if (!exists) {
+          mapping.remove(key)
+          persist()
+        }
+      }
     }
-    // Persist incrementally: failed writes can be retried without duplicated dates.
-    p.edit().putString(KEY_EVENTS, next.toString()).commit()
     for (key in desired.sorted()) {
-      if (next.has(key)) continue
-      val id = insert(context, calendarId, LocalDate.parse(key))
-      next.put(key, id)
-      p.edit().putString(KEY_EVENTS, next.toString()).commit()
+      if (mapping.has(key)) continue
+      val day = LocalDate.parse(key.substringBefore("@"))
+      val time = LocalTime.parse(key.substringAfter("@"))
+      val id = insert(context, calendarId, day, time)
+      mapping.put(key, id)
+      persist()
     }
     return status(context)
   }

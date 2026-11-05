@@ -194,7 +194,20 @@ export async function openAppNotificationSettings(): Promise<void> {
   await Linking.openSettings();
 }
 
-export async function refreshLocalReminders(forceReschedule = false): Promise<void> {
+// Serialize all event reconciliations. A foreground repair may overlap patient
+// enrollment or withdrawal; a second pass reads fresh DB state only after
+// the first finishes, preventing duplicate event creation.
+let reminderSyncQueue: Promise<void> = Promise.resolve();
+
+export function refreshLocalReminders(forceReschedule = false): Promise<void> {
+  const task = reminderSyncQueue.then(() => reconcileLocalReminders(forceReschedule));
+  reminderSyncQueue = task.catch(error => {
+    console.warn('Calendar/alarm reconciliation failed:', error);
+  });
+  return task;
+}
+
+async function reconcileLocalReminders(forceReschedule = false): Promise<void> {
   const tasks = await getTasks();
   // Prefer the user's explicitly selected system calendar. Create/reconcile
   // Calendar Provider events BEFORE cancelling legacy alarms, so a calendar

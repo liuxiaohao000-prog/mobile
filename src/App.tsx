@@ -553,6 +553,17 @@ function HomePage({
   );
 }
 
+// Local DB mutations are authoritative; calendar errors are nonfatal and
+// explicitly reported AFTER saving, never presented as failed patient writes.
+async function reconcileAfterPatientMutation(): Promise<string | null> {
+  try {
+    await refreshLocalReminders();
+    return null;
+  } catch (error) {
+    return error instanceof Error ? error.message : '手机日历暂时不可用';
+  }
+}
+
 function PatientEntryPage({ onOpen, onBack, onRefresh, actor }: BackProps & { actor: string }) {
   const [step, setStep] = useState<1 | 2>(1);
   const [name, setName] = useState('');
@@ -563,6 +574,7 @@ function PatientEntryPage({ onOpen, onBack, onRefresh, actor }: BackProps & { ac
   const [enrollmentAt, setEnrollmentAt] = useState('');
   const [notes, setNotes] = useState('');
   const [busy, setBusy] = useState(false);
+  const [syncingCalendar, setSyncingCalendar] = useState(false);
   const locked = useRef(false);
 
   const next = () => {
@@ -611,7 +623,13 @@ function PatientEntryPage({ onOpen, onBack, onRefresh, actor }: BackProps & { ac
         clinical: EMPTY_CLINICAL_INFO,
         consentDecision: 'AGREED', actor,
       });
+      setSyncingCalendar(true);
+      const calendarError = await reconcileAfterPatientMutation();
+      setSyncingCalendar(false);
       await onRefresh();
+      if (calendarError) {
+        Alert.alert('患者入组成功 · 日历待同步', `患者资料和随访任务已安全保存。日历同步未完成：${calendarError}。下次启动或手动同步时会重试。`);
+      }
       onOpen({ kind: 'patient', id: patientId });
     } catch (error) {
       if (error instanceof DuplicatePatientError) Alert.alert('患者可能已经存在', error.message);
@@ -619,6 +637,7 @@ function PatientEntryPage({ onOpen, onBack, onRefresh, actor }: BackProps & { ac
     } finally {
       locked.current = false;
       setBusy(false);
+      setSyncingCalendar(false);
     }
   };
 
@@ -672,7 +691,7 @@ function PatientEntryPage({ onOpen, onBack, onRefresh, actor }: BackProps & { ac
               <InfoLine label="入组日期" value={enrollmentAt} />
               {notes.trim() ? <InfoLine label="备注" value={notes.trim()} /> : null}
             </Card>
-            <PrimaryButton title={busy ? '正在办理入组…' : '患者同意 · 直接完成入组'} onPress={() => { void finish(true); }} disabled={busy} />
+            <PrimaryButton title={syncingCalendar ? '已保存 · 正在核对日历…' : busy ? '正在办理入组…' : '患者同意 · 直接完成入组'} onPress={() => { void finish(true); }} disabled={busy} />
             <PrimaryButton title="患者不同意 · 不创建随访任务" secondary disabled={busy} onPress={() => {
               Alert.alert('确认患者不同意？', '仅保存不同意记录，不创建患者档案或随访计划。', [
                 { text: '返回', style: 'cancel' },
@@ -765,6 +784,7 @@ function PatientDetailPage({
   onRefresh,
 }: BackProps & { id: string; actor: string }) {
   const [patient, setPatient] = useState<Patient>();
+  const [exitBusy, setExitBusy] = useState(false);
   const [tasks, setTasks] = useState<FollowupTask[]>([]);
   const [consent, setConsent] = useState<Awaited<ReturnType<typeof getLatestConsent>>>();
   const [qualification, setQualification] = useState<Awaited<ReturnType<typeof getLatestQualificationVerification>>>();
@@ -790,12 +810,22 @@ function PatientDetailPage({
         text: '确认退出',
         style: 'destructive',
         onPress: async () => {
+          if (exitBusy) return;
+          setExitBusy(true);
+          let exited = false;
           try {
             await exitPatient(patient.id, '用户手动确认患者退出', actor);
+            exited = true;
+            const calendarError = await reconcileAfterPatientMutation();
             await onRefresh();
             await load();
+            if (calendarError) Alert.alert('患者已退出 · 日历待同步',
+              `患者退出状态已保存。日历核对未完成：${calendarError}，下次打开研伴会自动重试。`);
           } catch (error) {
-            Alert.alert('退出失败', error instanceof Error ? error.message : '请重试。');
+            Alert.alert(exited ? '患者已退出 · 页面刷新异常' : '退出失败',
+              error instanceof Error ? error.message : '请重试。');
+          } finally {
+            setExitBusy(false);
           }
         },
       },
@@ -833,7 +863,7 @@ function PatientDetailPage({
       <SectionHeading title="随访计划" />
       {tasks.map((task) => <TaskCard key={task.id} task={task} onPress={() => onOpen({ kind: 'task', id: task.id })} />)}
       {patient.status === 'ACTIVE' ? (
-        <PrimaryButton title="患者退出研究" onPress={confirmExit} danger />
+        <PrimaryButton title={exitBusy ? "正在退出并核对日历…" : "患者退出研究"} onPress={confirmExit} disabled={exitBusy} danger />
       ) : (
         <Card><Text style={styles.helperText}>该患者已退出。后续提醒已停止。</Text></Card>
       )}
@@ -1084,7 +1114,11 @@ function FollowupRecordPage({
         notes,
         actor,
       });
+      const calendarError = completed ? await reconcileAfterPatientMutation() : null;
       await onRefresh();
+      if (calendarError) {
+        Alert.alert('随访已保存 · 日历待同步', `随访记录已保存；日历同步失败：${calendarError}。`);
+      }
       onBack();
     } catch (error) {
       Alert.alert('保存失败', error instanceof Error ? error.message : '请重试。');
@@ -1247,10 +1281,11 @@ function SettingsPage({ onRefresh }: Props) {
       // Surface sync failure to the user. The existing native alarm is not
       // cancelled until the Calendar Provider write succeeds.
       await syncCalendarFollowups(await getTasks());
+      await refreshLocalReminders(true);
       await onRefresh(true);
       setCalendarReminder(await calendarReminderStatus());
       setCalendarAdvanced(false);
-      Alert.alert('日历提醒已开启', '研伴已向所选日历写入未来随访日期。每天只有一条提醒，不包含患者信息和数量。请另外确认该日历应用的通知和锁屏提醒设置。');
+      Alert.alert('日历提醒已开启', '研伴已向所选日历写入未来随访日期。每天 09:30、19:00 各一条提醒，不包含患者信息和数量。请另外确认该日历应用的通知和锁屏提醒设置。');
     } catch (error) {
       Alert.alert('日历同步未成功', error instanceof Error ? error.message : '请返回检查权限和日历账户。');
     } finally {
@@ -1264,6 +1299,7 @@ function SettingsPage({ onRefresh }: Props) {
       const next = await configureCalendarReminder(null, false);
       setCalendarReminder(next);
       setCalendarOptions([]);
+      await refreshLocalReminders(true);
       await onRefresh(true);
       Alert.alert('已切回研伴提醒', '已尝试删除研伴创建的未来日历日程，原生提醒重新启用。');
     } catch (error) {
@@ -1498,7 +1534,7 @@ function SettingsPage({ onRefresh }: Props) {
               </View>
               <View style={[styles.reminderStatusDot, { backgroundColor: calendarReminder?.enabled && calendarReminder.permissionGranted ? theme.success : theme.accent }]} />
             </View>
-            <Text style={styles.helperText}>每天最多一条日程：「研伴 · 今日随访提醒」，上午 09:00 通知，不展示患者姓名、电话或数量。未来日程以研伴数据库为准；写入后由手机日历应用负责提醒。</Text>
+            <Text style={styles.helperText}>同一天共用两条日程：「研伴 · 今日随访提醒」，上午 09:30 与晚上 19:00 通知，不展示患者姓名、电话或数量。未来日程以研伴数据库为准；写入后由手机日历应用负责提醒。</Text>
             <Text style={styles.helperText}>
               状态：{calendarReminder?.enabled ? calendarReminder.permissionGranted ? '已开启' : '已开启但日历权限失效' : '尚未开启'}
               {' · '}已同步日期 {calendarReminder?.syncedDates ?? 0}
@@ -1565,7 +1601,7 @@ function SettingsPage({ onRefresh }: Props) {
                 <PrimaryButton title={calendarBusy ? '正在处理…' : '立即重新同步日历'} secondary disabled={calendarBusy}
                   onPress={() => {
                     setCalendarBusy(true);
-                    onRefresh(true).then(() => refreshCalendarStatus())
+                    refreshLocalReminders(true).then(() => onRefresh(true)).then(() => refreshCalendarStatus())
                       .then(() => Alert.alert('同步请求已提交', '请检查上方状态和系统日历的未来随访日程。'))
                       .catch(error => Alert.alert('同步失败', error instanceof Error ? error.message : '请检查权限。'))
                       .finally(() => setCalendarBusy(false));
@@ -1829,7 +1865,7 @@ function SettingsPage({ onRefresh }: Props) {
           expanded={aboutDetailsOpen}
           onToggle={() => setAboutDetailsOpen((value) => !value)}
         >
-          <InfoLine label="应用版本" value="2.0.14-preview" />
+          <InfoLine label="应用版本" value="2.0.15-preview" />
           <InfoLine label="研究方案" value={STUDY_PROTOCOL_VERSION} />
           <Text style={styles.helperText}>当前使用两步患者信息登记与同意确认。研究资格核查和正式知情同意仍应按研究方案执行。</Text>
         </SettingsDisclosure>
@@ -1947,13 +1983,10 @@ export default function App() {
       const exactAlarmGranted = await getExactAlarmPermission();
       const permissionChanged = exactAlarmPermissionRef.current !== null
         && exactAlarmPermissionRef.current !== exactAlarmGranted;
-      try {
-        await refreshLocalReminders(forceReminderReschedule || permissionChanged);
-      } catch (reminderError) {
-        // A Calendar Provider error or revoked calendar permission must not
-        // prevent access to the encrypted patient database and follow-up UI.
-        console.warn('Follow-up reminder sync needs attention:', reminderError);
-      }
+      // Run calendar reconciliation asynchronously after rendering the data.
+      // Do not delay homepage readiness, app resume or patient navigation.
+      void refreshLocalReminders(forceReminderReschedule || permissionChanged)
+        .catch(reminderError => console.warn('Follow-up reminder sync needs attention:', reminderError));
       // Event-driven update: never poll the encrypted database from the monitor.
       await syncBackgroundMonitorSnapshot(nextTasks).catch(() => undefined);
       exactAlarmPermissionRef.current = exactAlarmGranted;
