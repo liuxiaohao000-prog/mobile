@@ -32,6 +32,7 @@ import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
+import com.facebook.react.bridge.ReadableArray
 import com.facebook.react.uimanager.ViewManager
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -79,6 +80,32 @@ class FollowupReminderModule(
   private val reactContext: ReactApplicationContext,
 ) : ReactContextBaseJavaModule(reactContext) {
   override fun getName(): String = "FollowupReminder"
+
+  @ReactMethod
+  fun getCalendarReminderStatus(promise: Promise) {
+    try { promise.resolve(FollowupCalendarSync.status(reactContext)) }
+    catch (error: Throwable) { promise.reject("CALENDAR_STATUS_FAILED", error.message, error) }
+  }
+
+  @ReactMethod
+  fun listWritableCalendars(promise: Promise) {
+    try { promise.resolve(FollowupCalendarSync.listCalendars(reactContext)) }
+    catch (error: Throwable) { promise.reject("CALENDAR_LIST_FAILED", error.message, error) }
+  }
+
+  @ReactMethod
+  fun configureCalendarReminders(calendarId: String?, enabled: Boolean, promise: Promise) {
+    try { promise.resolve(FollowupCalendarSync.configure(reactContext, calendarId, enabled)) }
+    catch (error: Throwable) { promise.reject("CALENDAR_CONFIG_FAILED", error.message, error) }
+  }
+
+  @ReactMethod
+  fun syncCalendarReminderDates(dates: ReadableArray, promise: Promise) {
+    try {
+      val keys = (0 until dates.size()).mapNotNull { dates.getString(it) }
+      promise.resolve(FollowupCalendarSync.sync(reactContext, keys))
+    } catch (error: Throwable) { promise.reject("CALENDAR_SYNC_FAILED", error.message, error) }
+  }
 
   @ReactMethod
   fun prepareNotificationChannel(promise: Promise) {
