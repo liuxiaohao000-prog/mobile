@@ -1,7 +1,7 @@
 import { NativeModules, PermissionsAndroid, Platform } from 'react-native';
 import type { FollowupTask } from '../types';
 
-export type WritableCalendar = { id: string; name: string; account: string };
+export type WritableCalendar = { id: string; name: string; account: string; isLocal: boolean; isSpecial: boolean };
 export type CalendarReminderStatus = {
   enabled: boolean;
   calendarId: string | null;
@@ -14,6 +14,9 @@ type CalendarNative = {
   listWritableCalendars: () => Promise<WritableCalendar[]>;
   configureCalendarReminders: (id: string | null, enabled: boolean) => Promise<CalendarReminderStatus>;
   syncCalendarReminderDates: (dates: string[]) => Promise<CalendarReminderStatus>;
+  openNextCalendarReminder: () => Promise<boolean>;
+  createCalendarRingingTest: () => Promise<string>;
+  openCalendarRingingTest: () => Promise<boolean>;
 };
 
 const native = NativeModules.FollowupReminder as CalendarNative | undefined;
@@ -58,4 +61,24 @@ export async function syncCalendarFollowups(tasks: FollowupTask[]): Promise<Cale
     .filter(task => task.status !== 'COMPLETED' && task.status !== 'CANCELLED')
     .map(task => task.plannedDate))).sort();
   return androidCalendar().syncCalendarReminderDates(dates);
+}
+
+/** Return available ordinary calendars first. Hide vendor-special-purpose
+ * calendars by default, but leave a diagnostic advanced choice in the UI.
+ */
+export function preferredWritableCalendars(all: WritableCalendar[]): WritableCalendar[] {
+  return all.filter(calendar => !calendar.isSpecial)
+    .sort((a, b) => Number(b.isLocal) - Number(a.isLocal) || a.name.localeCompare(b.name, 'zh-CN'));
+}
+
+export async function openNextCalendarReminder(): Promise<boolean> {
+  return androidCalendar().openNextCalendarReminder();
+}
+
+export async function createCalendarRingingTest(): Promise<string> {
+  return androidCalendar().createCalendarRingingTest();
+}
+
+export async function openCalendarRingingTest(): Promise<boolean> {
+  return androidCalendar().openCalendarRingingTest();
 }
