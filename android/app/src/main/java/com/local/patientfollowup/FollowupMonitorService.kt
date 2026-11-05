@@ -286,26 +286,18 @@ class FollowupMonitorService : Service() {
       }
       val open = PendingIntent.getActivity(context, OPEN_REQUEST_CODE, openIntent,
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-      val stop = PendingIntent.getService(context, STOP_REQUEST_CODE,
-        Intent(context, FollowupMonitorService::class.java).setAction(ACTION_STOP),
-        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
 
       val compact = RemoteViews(context.packageName, R.layout.yanban_monitor_compact).apply {
         setTextViewText(R.id.yanban_monitor_compact_counts,
           "待随访 $pending   ·   已完成 $completed   ·   总入组 $enrolled")
       }
-      val expanded = RemoteViews(context.packageName, R.layout.yanban_monitor_expanded).apply {
-        setTextViewText(R.id.yanban_monitor_due, pending.toString())
-        setTextViewText(R.id.yanban_monitor_completed, completed.toString())
-        setTextViewText(R.id.yanban_monitor_enrolled, enrolled.toString())
-      }
       return NotificationCompat.Builder(context, CHANNEL_ID)
         .setSmallIcon(R.drawable.ic_yanban_monitor_notification)
-        .setContentTitle("研伴 · 随访监测中")
+        .setContentTitle("今日随访 · 监测中")
         .setContentText("待随访 $pending · 今日完成 $completed · 总入组 $enrolled")
         .setStyle(NotificationCompat.DecoratedCustomViewStyle())
         .setCustomContentView(compact)
-        .setCustomBigContentView(expanded)
+        .setCustomBigContentView(compact)
         .setContentIntent(open)
         .setCategory(NotificationCompat.CATEGORY_SERVICE)
         .setPriority(NotificationCompat.PRIORITY_LOW)
@@ -314,7 +306,6 @@ class FollowupMonitorService : Service() {
         .setSilent(true)
         .setOngoing(true)
         .setShowWhen(false)
-        .addAction(android.R.drawable.ic_media_pause, "结束监测", stop)
         .build()
     }
   }
@@ -440,5 +431,22 @@ class FollowupMonitorStoppedReceiver : android.content.BroadcastReceiver() {
     context.getSharedPreferences(MONITOR_PREFS, Context.MODE_PRIVATE).edit()
       .putBoolean(KEY_ENABLED, false)
       .putString(KEY_LAST_RESTART_REASON, "用户从通知栏停止").commit()
+  }
+}
+
+// Dedicated boot / package upgrade receiver for optional aggregate monitoring.
+// Former reminder alarms are intentionally NOT restored.
+class FollowupMonitorBootReceiver : android.content.BroadcastReceiver() {
+  override fun onReceive(context: Context, intent: Intent?) {
+    when (val action = intent?.action) {
+      Intent.ACTION_BOOT_COMPLETED,
+      Intent.ACTION_MY_PACKAGE_REPLACED -> {
+        FollowupMonitorService.restoreAfterSystemEvent(context, action)
+      }
+      Intent.ACTION_TIME_CHANGED,
+      Intent.ACTION_TIMEZONE_CHANGED -> {
+        FollowupMonitorService.refreshVisibleNotification(context)
+      }
+    }
   }
 }
