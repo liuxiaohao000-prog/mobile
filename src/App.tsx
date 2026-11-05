@@ -1179,6 +1179,9 @@ function SettingsDisclosure({
         onPress={onToggle}
         style={styles.settingsDisclosureRow}
       >
+        <FeatureIcon
+          ios={title === '数据保护' ? 'externaldrive.fill.badge.checkmark' : title === '其他设置' ? 'slider.horizontal.3' : 'info.circle.fill'}
+          android={title === '数据保护' ? 'verified_user' : title === '其他设置' ? 'tune' : 'info'} />
         <View style={{ flex: 1 }}>
           <Text style={styles.cardHeading}>{title}</Text>
           <Text style={styles.settingsSubtitle}>{subtitle}</Text>
