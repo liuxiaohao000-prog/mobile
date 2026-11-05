@@ -75,7 +75,7 @@ class PatientAutoBackupModule(
   fun getBackupDirectoryName(promise: Promise) {
     try {
       val treeUri = getBackupTreeUri()
-      promise.resolve(treeUri?.let { treeDisplayName(it) })
+      promise.resolve(treeUri?.let { treeDisplayPath(it) })
     } catch (error: Throwable) {
       promise.reject("BACKUP_DIRECTORY_NAME_FAILED", error.message ?: "无法读取备份文件夹名称。", error)
     }
@@ -320,6 +320,26 @@ class PatientAutoBackupModule(
     }
     if (!persisted || treeDisplayName(uri) == null) return null
     return uri
+  }
+
+  // Android's Storage Access Framework returns a document-tree URI, not an
+  // unrestricted filesystem path. Render the full human-readable location for
+  // the built-in local storage provider; never expose the raw encoded URI.
+  private fun treeDisplayPath(treeUri: Uri): String {
+    val id = DocumentsContract.getTreeDocumentId(treeUri)
+    return when {
+      treeUri.authority == "com.android.externalstorage.documents" &&
+        id.startsWith("primary:") -> {
+        val relative = id.removePrefix("primary:").trim('/')
+        if (relative.isBlank()) "手机内部存储" else "手机内部存储/$relative"
+      }
+      treeUri.authority == "com.android.externalstorage.documents" -> {
+        val volume = id.substringBefore(':')
+        val relative = id.substringAfter(':', "").trim('/')
+        if (relative.isBlank()) "存储设备 $volume" else "存储设备 $volume/$relative"
+      }
+      else -> (treeDisplayName(treeUri) ?: "已授权文件夹") + "（第三方文件管理器，完整物理路径不可用）"
+    }
   }
 
   private fun treeDisplayName(treeUri: Uri): String? = try {
