@@ -99,6 +99,27 @@ function Label({ children, tone = 'muted' }: { children: React.ReactNode; tone?:
   return <Text style={[styles.label, tone === 'ink' && { color: theme.ink }]}>{children}</Text>;
 }
 
+function FeatureIcon({ ios, android, tint = theme.primary, size = 20 }: {
+  ios: string; android: string; tint?: string; size?: number;
+}) {
+  return <View style={styles.featureIcon}>
+    <SymbolView name={{ ios: ios as never, android: android as never, web: android as never }}
+      size={size} tintColor={tint} />
+  </View>;
+}
+
+function FeatureHeading({ title, subtitle, ios, android }: {
+  title: string; subtitle: string; ios: string; android: string;
+}) {
+  return <View style={styles.featureHeading}>
+    <FeatureIcon ios={ios} android={android} />
+    <View style={{ flex: 1 }}>
+      <Text style={styles.featureHeadingTitle}>{title}</Text>
+      <Text style={styles.featureHeadingSubtitle}>{subtitle}</Text>
+    </View>
+  </View>;
+}
+
 function Card({ children, style }: { children: React.ReactNode; style?: object }) {
   return <View style={[styles.card, style]}>{children}</View>;
 }
@@ -110,6 +131,7 @@ function PrimaryButton({
   secondary,
   danger,
   loading,
+  icon,
 }: {
   title: string;
   onPress: () => void;
@@ -117,6 +139,7 @@ function PrimaryButton({
   secondary?: boolean;
   danger?: boolean;
   loading?: boolean;
+  icon?: { ios: string; android: string };
 }) {
   return (
     <Pressable
@@ -131,7 +154,10 @@ function PrimaryButton({
       ]}
     >
       <View style={styles.buttonContent}>
-        {loading ? <ActivityIndicator size="small" color={secondary ? theme.primaryDark : '#FFFFFF'} /> : null}
+        {loading ? <ActivityIndicator size="small" color={secondary ? theme.primaryDark : '#FFFFFF'} /> : icon ? (
+          <SymbolView name={{ ios: icon.ios as never, android: icon.android as never, web: icon.android as never }}
+            size={19} tintColor={secondary ? theme.primaryDark : '#FFFFFF'} />
+        ) : null}
         <Text
           style={[
             styles.buttonText,
@@ -733,8 +759,9 @@ function PatientListPage({ onOpen }: Props) {
   );
   return (
     <ScrollView contentContainerStyle={styles.pageContent}>
-      <PageHeader title="患者档案" subtitle={patients.length + ' 位患者'} />
-      <PrimaryButton title="新增或补录患者" onPress={() => onOpen({ kind: 'patientEntry' })} />
+      <FeatureHeading title="患者档案" subtitle={patients.length + ' 位患者 · 安心管理每一份档案'} ios="person.2.fill" android="groups" />
+      <View style={styles.pageAccent} />
+      <PrimaryButton title="新增或补录患者" icon={{ ios: 'person.badge.plus', android: 'person_add' }} onPress={() => onOpen({ kind: 'patientEntry' })} />
       <TextField label="搜索患者" value={query} onChangeText={setQuery} placeholder="姓名、电话或患者编号" />
       {filtered.length === 0 ? (
         <EmptyState title={patients.length ? '没有找到匹配记录' : '还没有正式入组患者'} subtitle={patients.length ? '试试患者姓名或编号。' : '完成患者信息登记并确认同意后，患者会出现在这里。'} />
@@ -985,7 +1012,8 @@ function FollowupsPage({ onOpen, onRefresh, tasks }: Props & { tasks: FollowupTa
       contentContainerStyle={styles.followupListContent}
       ListHeaderComponent={(
         <View style={styles.followupsHeader}>
-          <PageHeader title="患者随访" subtitle="按患者查看计划和进度，点入档案处理具体节点。" />
+          <FeatureHeading title="患者随访" subtitle="每一步都有记录，每次跟进都清晰" ios="calendar.badge.clock" android="event_available" />
+          <View style={styles.pageAccent} />
           <View style={styles.filterRow}>
             {(['待办', '逾期', '已完成', '全部'] as const).map((item) => (
               <Pressable
@@ -1348,26 +1376,28 @@ function SettingsPage({ onRefresh }: Props) {
   return (
     <KeyboardAvoidingView style={styles.fill} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView contentContainerStyle={styles.pageContent}>
-        <PageHeader title="我的" subtitle="提醒、数据与基本设置" />
+        <FeatureHeading title="我的" subtitle="常用功能，简单清楚" ios="gearshape.2" android="tune" />
+        <View style={styles.pageAccent} />
         {Platform.OS === 'android' ? (
           <Card>
             <View style={styles.taskTop}>
               <View style={{ flex: 1 }}>
-                <Text style={styles.cardHeading}>日历提醒</Text>
-                <Text style={styles.settingsSubtitle}>每天 09:30 / 19:00 · 同日任务共享</Text>
+                <FeatureHeading title="日历提醒" subtitle="早上 09:30、晚上 19:00 · 两次提醒" ios="calendar" android="event_available" />
               </View>
               <View style={[styles.reminderStatusDot, {
                 backgroundColor: calendarReminder?.enabled && calendarReminder.permissionGranted
                   ? theme.success : theme.accent,
               }]} />
             </View>
+            <Text style={styles.helperText}>随访当天会收到两次提示。同一天有多位患者，也只提醒两次。</Text>
             <Text style={styles.helperText}>状态：{calendarReminder?.enabled
               ? calendarReminder.permissionGranted ? '已连接手机日历' : '日历权限需重新授权'
               : '尚未连接日历'} · 已同步 {calendarReminder?.syncedDates ?? 0} 个日期</Text>
-            <Text style={styles.helperText}>提醒由手机日历投递，不包含患者姓名及数量。日历账户可能会同步日程标题和时间。</Text>
+            <Text style={styles.helperText}>不会显示患者姓名。如果用的是云日历，提醒时间可能会同步到你的日历账户。</Text>
             <View style={{ height: 10 }} />
             <PrimaryButton
               title={calendarBusy ? '正在处理…' : calendarReminder?.enabled ? '更换日历' : '连接手机日历'}
+              icon={{ ios: 'calendar.badge.plus', android: 'event_available' }}
               onPress={() => void connectCalendar()} disabled={calendarBusy} loading={calendarBusy} />
             {calendarReminder?.enabled ? (
               <View style={{ marginTop: 8 }}>
@@ -1407,18 +1437,19 @@ function SettingsPage({ onRefresh }: Props) {
           </Card>
         ) : null}
         <SettingsDisclosure
-          title="数据与备份"
-          subtitle={backupDirectoryName ? '自动加密备份 · 已选择文件夹' : '本机加密保存 · 请手动选择备份文件夹'}
+          title="数据保护"
+          subtitle={backupDirectoryName ? '加密存储 · 自动备份' : '加密存储 · 设置备份文件夹'}
           expanded={backupDetailsOpen}
           onToggle={() => setBackupDetailsOpen(value => !value)}
         >
-          <Text style={styles.helperText}>患者资料保存在本机 SQLCipher 加密数据库。外部备份仍由你手动选择文件夹；恢复旧数据请在首次创建资料前选择原备份文件夹。</Text>
+          <FeatureHeading title="守护你的数据" subtitle="患者资料加密保存，按原设置自动备份" ios="externaldrive.fill.badge.checkmark" android="verified_user" />
+          <Text style={styles.helperText}>第一次选择备份文件夹，以后会自动保存。换手机或重装时，选回原来的文件夹就可以尝试恢复。</Text>
           <Text style={styles.helperText}>备份目录：{backupDirectoryName ?? '未设置'}</Text>
           <View style={{ height: 12 }} />
           <PrimaryButton
             title={changingBackupDirectory ? '正在打开文件夹选择器…' : '选择或更改备份文件夹'}
             onPress={() => void changeBackupDirectory()} disabled={changingBackupDirectory}
-            loading={changingBackupDirectory} secondary />
+            loading={changingBackupDirectory} secondary icon={{ ios: 'folder', android: 'folder_open' }} />
         </SettingsDisclosure>
         <SettingsDisclosure
           title="其他设置"
@@ -1426,7 +1457,7 @@ function SettingsPage({ onRefresh }: Props) {
           expanded={otherDetailsOpen}
           onToggle={() => setOtherDetailsOpen(value => !value)}
         >
-          <Text style={styles.cardHeading}>操作人信息</Text>
+          <FeatureHeading title="操作人" subtitle="登记时自动留下操作记录" ios="person.crop.circle" android="badge" />
           <TextField label="登记操作人" value={actor} onChangeText={setActor} placeholder="用于本机审计记录" />
           <View style={{ height: 8 }} />
           <PrimaryButton title={saved ? '已保存' : '保存操作人'} onPress={() => void save()} secondary />
@@ -1434,8 +1465,7 @@ function SettingsPage({ onRefresh }: Props) {
             <View style={{ marginTop: 16 }}>
               <View style={styles.taskTop}>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.cardHeading}>顶部随访监测</Text>
-                  <Text style={styles.settingsSubtitle}>可选 · 仅显示紧凑统计横幅，不负责日历提醒</Text>
+                  <FeatureHeading title="顶部监测" subtitle="通知栏显示待办数量，随时可以关闭" ios="waveform.path.ecg" android="monitor_heart" />
                 </View>
                 <Switch value={monitorState.enabled} disabled={monitorBusy}
                   onValueChange={value => void toggleMonitor(value)}
@@ -1466,7 +1496,7 @@ function SettingsPage({ onRefresh }: Props) {
           expanded={aboutDetailsOpen}
           onToggle={() => setAboutDetailsOpen(value => !value)}
         >
-          <InfoLine label="应用版本" value="2.0.16-preview" />
+          <InfoLine label="应用版本" value="2.0.17-preview" />
           <InfoLine label="研究方案" value={STUDY_PROTOCOL_VERSION} />
           <Text style={styles.helperText}>患者登记为两步流程。正式知情同意与资格审查仍须按研究方案执行。</Text>
         </SettingsDisclosure>
