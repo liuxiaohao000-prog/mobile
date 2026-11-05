@@ -1518,8 +1518,8 @@ function LoadingView({ label }: { label: string }) {
   );
 }
 
-function PermissionGuide({ calendarMissing, notificationMissing, busy, onCalendar, onMonitor, onDismiss }: {
-  calendarMissing: boolean; notificationMissing: boolean; busy: boolean;
+function PermissionGuide({ calendarMissing, calendarAuthorized, notificationMissing, busy, onCalendar, onMonitor, onDismiss }: {
+  calendarMissing: boolean; calendarAuthorized: boolean; notificationMissing: boolean; busy: boolean;
   onCalendar: () => void; onMonitor: () => void; onDismiss: () => void;
 }) {
   return <Modal visible transparent animationType="fade" onRequestClose={onDismiss}>
@@ -1530,8 +1530,8 @@ function PermissionGuide({ calendarMissing, notificationMissing, busy, onCalenda
         <Text style={styles.permissionIntro}>这些权限只用于提醒和顶部统计，不会把患者资料发送到外部。</Text>
         {calendarMissing ? <View style={styles.permissionItem}>
           <FeatureHeading title="① 日历提醒" subtitle="有随访任务时，上午 9:30 和晚上 7:00 提醒你" ios="calendar.badge.clock" android="event_available" />
-          <Text style={styles.helperText}>点下面的按钮，手机会询问是否允许使用日历，请选择「允许」。</Text>
-          <PrimaryButton title="开启日历提醒" icon={{ ios: 'calendar', android: 'calendar_month' }} loading={busy} disabled={busy} onPress={onCalendar} />
+          <Text style={styles.helperText}>{calendarAuthorized ? '日历已允许访问，点击连接后会优先使用手机本地日历。' : '点下面的按钮，手机会询问是否允许使用日历，请选择「允许」。'}</Text>
+          <PrimaryButton title={calendarAuthorized ? '连接日历提醒' : '开启日历提醒'} icon={{ ios: 'calendar', android: 'calendar_month' }} loading={busy} disabled={busy} onPress={onCalendar} />
         </View> : null}
         {notificationMissing ? <View style={styles.permissionItem}>
           <FeatureHeading title="② 顶部监测" subtitle="通知栏随时看到待随访和完成情况" ios="bell.badge" android="notifications_active" />
@@ -1622,7 +1622,7 @@ export default function App() {
   const [todayContacts, setTodayContacts] = useState<DueFollowupContact[]>([]);
   const [briefingVisible, setBriefingVisible] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [permissionGuide, setPermissionGuide] = useState<{ calendar: boolean; notification: boolean } | null>(null);
+  const [permissionGuide, setPermissionGuide] = useState<{ calendar: boolean; calendarAuthorized: boolean; notification: boolean } | null>(null);
   const [permissionBusy, setPermissionBusy] = useState(false);
   const permissionCheckRunning = useRef(false);
   const permissionLastPrompt = useRef(0);
@@ -1648,7 +1648,7 @@ export default function App() {
       if (showGuide && (calendarMissing || notificationMissing) &&
         Date.now() - permissionLastPrompt.current > 12000) {
         permissionLastPrompt.current = Date.now();
-        setPermissionGuide({ calendar: calendarMissing, notification: notificationMissing });
+        setPermissionGuide({ calendar: calendarMissing, calendarAuthorized: Boolean(status?.permissionGranted), notification: notificationMissing });
       } else if (!calendarMissing && !notificationMissing) {
         setPermissionGuide(null);
       }
@@ -1994,7 +1994,7 @@ export default function App() {
         onOpenTask={openBriefingTask}
       />
       {permissionGuide && (permissionGuide.calendar || permissionGuide.notification) ? (
-        <PermissionGuide calendarMissing={permissionGuide.calendar}
+        <PermissionGuide calendarMissing={permissionGuide.calendar} calendarAuthorized={permissionGuide.calendarAuthorized}
           notificationMissing={permissionGuide.notification} busy={permissionBusy}
           onCalendar={() => void grantCalendarFromGuide()}
           onMonitor={() => void grantMonitorFromGuide()}
