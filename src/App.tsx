@@ -617,7 +617,7 @@ function PatientEntryPage({ onOpen, onBack, onRefresh }: BackProps) {
       if (agreed && !groupName) throw new Error('请返回第一步选择研究组别。');
       if (!agreed) {
         await recordDeclinedRegistration({
-          name, age: age.trim() ? Number(age) : undefined, gender, notes, actor,
+          name, age: age.trim() ? Number(age) : undefined, gender, notes, actor: '本机',
         });
         await onRefresh();
         Alert.alert('已记录患者不同意', '未创建正式患者，也没有生成随访计划。');
@@ -629,7 +629,7 @@ function PatientEntryPage({ onOpen, onBack, onRefresh }: BackProps) {
         name, phone, age: age.trim() ? Number(age) : undefined,
         gender, groupName, enrollmentAt, notes,
         clinical: EMPTY_CLINICAL_INFO,
-        consentDecision: 'AGREED', actor,
+        consentDecision: 'AGREED', actor: '本机',
       });
       setSyncingCalendar(true);
       const calendarError = await reconcileAfterPatientMutation();
@@ -822,7 +822,7 @@ function PatientDetailPage({
           setExitBusy(true);
           let exited = false;
           try {
-            await exitPatient(patient.id, '用户手动确认患者退出', actor);
+            await exitPatient(patient.id, '用户手动确认患者退出', '本机');
             exited = true;
             const calendarError = await reconcileAfterPatientMutation();
             await onRefresh();
@@ -853,18 +853,15 @@ function PatientDetailPage({
         <View style={styles.infoDivider} />
         <InfoLine label="联系电话" value={patient.phone} />
         <InfoLine label="入组日期" value={dateKey(parseLocalDate(patient.enrollmentAt) ?? new Date(patient.enrollmentAt))} />
-        <InfoLine label="入组操作人" value={patient.enrolledBy} />
         {patient.notes ? <InfoLine label="情况说明" value={patient.notes} /> : null}
       </Card>
       <Card>
         <Text style={styles.cardHeading}>患者同意与历史核实记录</Text>
         <InfoLine label="患者选择" value={consent?.decision === 'AGREED' ? '同意参加' : consent?.decision === 'DECLINED' ? '不同意' : consent?.decision === 'NOT_RECORDED' ? '未记录' : '暂无记录'} />
         {consent ? <InfoLine label="记录时间" value={new Date(consent.createdAt).toLocaleString()} /> : null}
-        {consent ? <InfoLine label="记录操作人" value={consent.actor} /> : null}
         {consent ? <InfoLine label="证明材料" value={consent.evidencePath ? '已提交加密图片' : '未提交（可选）'} /> : null}
         <View style={styles.infoDivider} />
         <InfoLine label="资格核实" value={qualification?.verified ? '已核实' : qualification ? '有记录，未标记已核实' : '暂无记录'} />
-        {qualification ? <InfoLine label="核实人" value={qualification.verifier} /> : null}
         {qualification ? <InfoLine label="核实时间" value={new Date(qualification.createdAt).toLocaleString()} /> : null}
         {qualification?.note ? <InfoLine label="核实说明" value={qualification.note} /> : null}
       </Card>
@@ -1096,10 +1093,9 @@ function TaskDetailPage({
 
 function FollowupRecordPage({
   id,
-  actor,
   onBack,
   onRefresh,
-}: BackProps & { id: string; actor: string }) {
+}: BackProps & { id: string }) {
   const [contactedAt, setContactedAt] = useState(formatLocalDateTime(new Date()));
   const [result, setResult] = useState('已接通');
   const [completed, setCompleted] = useState(false);
@@ -1121,7 +1117,7 @@ function FollowupRecordPage({
         completed,
         condition,
         notes,
-        actor,
+        actor: '本机',
       });
       const calendarError = completed ? await reconcileAfterPatientMutation() : null;
       await onRefresh();
@@ -1439,14 +1435,10 @@ function SettingsPage({ onRefresh }: Props) {
         </SettingsDisclosure>
         <SettingsDisclosure
           title="其他设置"
-          subtitle="操作人 · 顶部监测"
+          subtitle="顶部监测和应用信息"
           expanded={otherDetailsOpen}
           onToggle={() => setOtherDetailsOpen(value => !value)}
         >
-          <FeatureHeading title="操作人" subtitle="登记时自动留下操作记录" ios="person.crop.circle" android="badge" />
-          <TextField label="登记操作人" value={actor} onChangeText={setActor} placeholder="用于本机审计记录" />
-          <View style={{ height: 8 }} />
-          <PrimaryButton title={saved ? '已保存' : '保存操作人'} onPress={() => void save()} secondary />
           {Platform.OS === 'android' ? (
             <View style={{ marginTop: 16 }}>
               <View style={styles.taskTop}>
