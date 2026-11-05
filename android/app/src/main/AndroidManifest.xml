@@ -7,14 +7,9 @@
   <uses-permission android:name="android.permission.READ_CALENDAR"/>
   <uses-permission android:name="android.permission.WRITE_CALENDAR"/>
   <uses-permission android:name="android.permission.RECORD_AUDIO" tools:node="remove"/>
-  <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>
-  <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
   <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
-  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SYSTEM_EXEMPTED"/>
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
-  <uses-permission android:name="android.permission.VIBRATE"/>
-  <uses-permission android:name="android.permission.WAKE_LOCK"/>
   <queries>
     <intent>
       <action android:name="android.intent.action.VIEW"/>
@@ -23,23 +18,18 @@
     </intent>
   </queries>
   <application android:name=".MainApplication" android:label="@string/app_name" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round" android:allowBackup="false" android:theme="@style/AppTheme" android:supportsRtl="true" android:enableOnBackInvokedCallback="false" android:fullBackupContent="@xml/secure_store_backup_rules" android:dataExtractionRules="@xml/secure_store_data_extraction_rules">
-    <service android:name=".FollowupVibrationService" android:exported="false" android:foregroundServiceType="systemExempted" />
     <service android:name=".FollowupMonitorService" android:process=":followup_guard" android:exported="false" android:stopWithTask="false" android:foregroundServiceType="specialUse">
       <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="User-enabled ongoing on-device monitoring of daily follow-up task counts with a visible persistent notification; no polling or network activity" />
     </service>
     <receiver android:name=".FollowupMonitorStoppedReceiver" android:exported="false" />
-    <receiver android:name=".FollowupReminderReceiver" android:enabled="true" android:exported="false">
+    <receiver android:name=".FollowupMonitorBootReceiver" android:exported="false">
       <intent-filter>
-        <action android:name="com.local.patientfollowup.FOLLOWUP_ALARM"/>
-        <action android:name="com.local.patientfollowup.TEST_ALARM"/>
         <action android:name="android.intent.action.BOOT_COMPLETED"/>
         <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
         <action android:name="android.intent.action.TIME_SET"/>
         <action android:name="android.intent.action.TIMEZONE_CHANGED"/>
-        <action android:name="android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED"/>
       </intent-filter>
     </receiver>
-    <meta-data android:name="com.google.firebase.messaging.default_notification_channel_id" android:value="followup-reminders-v4"/>
     <meta-data android:name="expo.modules.updates.ENABLED" android:value="false"/>
     <meta-data android:name="expo.modules.updates.ENABLE_BSDIFF_PATCH_SUPPORT" android:value="true"/>
     <meta-data android:name="expo.modules.updates.EXPO_UPDATES_CHECK_ON_LAUNCH" android:value="ALWAYS"/>
