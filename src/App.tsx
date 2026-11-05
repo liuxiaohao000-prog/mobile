@@ -691,7 +691,7 @@ function PatientEntryPage({ onOpen, onBack, onRefresh, actor }: BackProps & { ac
               <InfoLine label="入组日期" value={enrollmentAt} />
               {notes.trim() ? <InfoLine label="备注" value={notes.trim()} /> : null}
             </Card>
-            <PrimaryButton title={syncingCalendar ? '已保存 · 正在核对日历…' : busy ? '正在办理入组…' : '患者同意 · 直接完成入组'} onPress={() => { void finish(true); }} disabled={busy} />
+            <PrimaryButton title={syncingCalendar ? '已保存 · 正在核对日历…' : busy ? '正在办理入组…' : '患者同意 · 直接完成入组'} onPress={() => { void finish(true); }} disabled={busy} loading={busy} />
             <PrimaryButton title="患者不同意 · 不创建随访任务" secondary disabled={busy} onPress={() => {
               Alert.alert('确认患者不同意？', '仅保存不同意记录，不创建患者档案或随访计划。', [
                 { text: '返回', style: 'cancel' },
@@ -863,7 +863,7 @@ function PatientDetailPage({
       <SectionHeading title="随访计划" />
       {tasks.map((task) => <TaskCard key={task.id} task={task} onPress={() => onOpen({ kind: 'task', id: task.id })} />)}
       {patient.status === 'ACTIVE' ? (
-        <PrimaryButton title={exitBusy ? "正在退出并核对日历…" : "患者退出研究"} onPress={confirmExit} disabled={exitBusy} danger />
+        <PrimaryButton title={exitBusy ? "正在退出并核对日历…" : "患者退出研究"} onPress={confirmExit} disabled={exitBusy} loading={exitBusy} danger />
       ) : (
         <Card><Text style={styles.helperText}>该患者已退出。后续提醒已停止。</Text></Card>
       )}
