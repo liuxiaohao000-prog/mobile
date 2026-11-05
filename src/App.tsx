@@ -785,6 +785,59 @@ function PatientListPage({ onOpen }: Props) {
   );
 }
 
+function PatientEditForm({ patient, onSaved, onCancel }: {
+  patient: Patient; onSaved: () => Promise<void>; onCancel: () => void;
+}) {
+  const [name, setName] = useState(patient.name);
+  const [phone, setPhone] = useState(patient.phone);
+  const [age, setAge] = useState(patient.age ? String(patient.age) : '');
+  const [gender, setGender] = useState<Gender>(patient.gender);
+  const [notes, setNotes] = useState(patient.notes);
+  const [saving, setSaving] = useState(false);
+
+  const save = async () => {
+    if (saving) return;
+    setSaving(true);
+    let persisted = false;
+    try {
+      await updatePatientDetails({
+        patientId: patient.id,
+        name, phone, age: age.trim() ? Number(age) : 0, gender, notes,
+      });
+      persisted = true;
+      await onSaved();
+      Alert.alert('修改已保存', '患者资料已更新，随访日期和研究分组保持不变。');
+    } catch (error) {
+      Alert.alert(persisted ? '资料已保存，页面刷新失败' : '保存失败',
+        error instanceof Error ? error.message : '请检查后重试。');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return <Card>
+    <FeatureHeading title="编辑患者资料" subtitle="电话、姓名有变化时可修改；随访计划不变"
+      ios="square.and.pencil" android="edit" />
+    <TextField label="姓名" value={name} onChangeText={setName} required />
+    <TextField label="联系电话" value={phone} onChangeText={setPhone} keyboardType="phone-pad" required />
+    <TextField label="年龄（可选）" value={age} onChangeText={setAge} keyboardType="numeric" placeholder="不知道可留空" />
+    <Label tone="ink">性别</Label>
+    <View style={styles.choiceRow}>
+      {(['男','女','其他'] as Gender[]).map(item => (
+        <Pressable key={item} onPress={() => setGender(item)}
+          style={[styles.choice, gender === item && styles.choiceSelected]}>
+          <Text style={[styles.choiceText, gender === item && styles.choiceTextSelected]}>{item}</Text>
+        </Pressable>
+      ))}
+    </View>
+    <TextField label="备注" value={notes} onChangeText={setNotes} multiline placeholder="补充患者资料（可选）" />
+    <Text style={styles.helperText}>为了保护随访计划，入组日期、研究分组和患者编号不能在这里修改。</Text>
+    <PrimaryButton title={saving ? '正在保存…' : '保存患者资料'} loading={saving} disabled={saving}
+      icon={{ ios:'checkmark', android:'save' }} onPress={() => void save()} />
+    <PrimaryButton title="取消修改" secondary disabled={saving} onPress={onCancel} />
+  </Card>;
+}
+
 function PatientDetailPage({
   id,
   onBack,
@@ -793,6 +846,7 @@ function PatientDetailPage({
 }: BackProps & { id: string }) {
   const [patient, setPatient] = useState<Patient>();
   const [exitBusy, setExitBusy] = useState(false);
+  const [editingPatient, setEditingPatient] = useState(false);
   const [tasks, setTasks] = useState<FollowupTask[]>([]);
   const [consent, setConsent] = useState<Awaited<ReturnType<typeof getLatestConsent>>>();
   const [qualification, setQualification] = useState<Awaited<ReturnType<typeof getLatestQualificationVerification>>>();
@@ -854,7 +908,13 @@ function PatientDetailPage({
         <InfoLine label="联系电话" value={patient.phone} />
         <InfoLine label="入组日期" value={dateKey(parseLocalDate(patient.enrollmentAt) ?? new Date(patient.enrollmentAt))} />
         {patient.notes ? <InfoLine label="情况说明" value={patient.notes} /> : null}
+        <View style={{ height: 10 }} />
+        {!editingPatient ? <PrimaryButton title="编辑患者资料" secondary
+          icon={{ ios: 'square.and.pencil', android: 'edit' }}
+          onPress={() => setEditingPatient(true)} /> : null}
       </Card>
+      {editingPatient ? <PatientEditForm patient={patient} onCancel={() => setEditingPatient(false)}
+        onSaved={async () => { await load(); setEditingPatient(false); await onRefresh(); }} /> : null}
       <Card>
         <Text style={styles.cardHeading}>患者同意与历史核实记录</Text>
         <InfoLine label="患者选择" value={consent?.decision === 'AGREED' ? '同意参加' : consent?.decision === 'DECLINED' ? '不同意' : consent?.decision === 'NOT_RECORDED' ? '未记录' : '暂无记录'} />
