@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { SymbolView } from 'expo-symbols';
 import { dateKey } from './domain/dates';
 import { theme } from './theme';
 import type { DashboardSummary, FollowupTask } from './types';
@@ -65,9 +66,9 @@ export default function FollowupCalendarHome({
         <View style={s.heroCircleOne} />
         <View style={s.heroCircleTwo} />
         <View style={s.heroDecor}>
-          <Text style={s.heroDecorText}>＋</Text>
+          <SymbolView name={{ ios: 'calendar.badge.checkmark' as never, android: 'event_available' as never, web: 'event_available' as never }} size={42} tintColor="#FFFFFF" />
         </View>
-        <Text style={s.heroOverline}>YANBAN  /  CARE CALENDAR</Text>
+        <Text style={s.heroOverline}>TODAY FOLLOW-UP  /  CARE CALENDAR</Text>
         <Text style={s.heroTitle}>随访日历</Text>
         <Text style={s.heroSubtitle}>让每一次关怀，都如期而至。</Text>
         <View style={s.heroBadge}>
@@ -144,7 +145,9 @@ export default function FollowupCalendarHome({
       </View>
 
       <Pressable accessibilityRole="button" onPress={onOpenFollowups} style={s.overview}>
-        <View style={s.overviewIcon}><Text style={s.overviewIconText}>✓</Text></View>
+        <View style={s.overviewIcon}>
+          <SymbolView name={{ ios: 'chart.bar.fill' as never, android: 'insert_chart' as never, web: 'insert_chart' as never }} size={23} tintColor="#FFFFFF" />
+        </View>
         <View style={s.overviewHeading}>
           <Text style={s.overviewTitle}>本月随访概览</Text>
           <Text style={s.overviewSubtitle}>随访有序，安心在握</Text>
@@ -167,7 +170,10 @@ export default function FollowupCalendarHome({
             <Text style={s.sectionTitle}>{selectedDay === null ? '选择日期查看随访' : isTodaySelected ? '今天的随访' : `${month + 1}月${selectedDay}日 · 随访`}</Text>
           </View>
           <Pressable accessibilityRole="button" onPress={onRefresh} style={s.refresh}>
-            <Text style={s.refreshText}>刷新 ↻</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+              <SymbolView name={{ ios: 'arrow.clockwise' as never, android: 'refresh' as never, web: 'refresh' as never }} size={15} tintColor={theme.primary} />
+              <Text style={s.refreshText}>刷新</Text>
+            </View>
           </Pressable>
         </View>
         {selectedTasks.length ? selectedTasks.map(task => (
@@ -186,7 +192,10 @@ export default function FollowupCalendarHome({
       </View>
 
       <Pressable accessibilityRole="button" onPress={onAddPatient} style={s.addButton}>
-        <Text style={s.addButtonText}>＋  新增或补录患者</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 9 }}>
+          <SymbolView name={{ ios: 'person.badge.plus' as never, android: 'person_add' as never, web: 'person_add' as never }} size={21} tintColor="#FFFFFF" />
+          <Text style={s.addButtonText}>新增或补录患者</Text>
+        </View>
       </Pressable>
       <Text style={s.footer}>本机加密保存 · {summary.activePatients} 位在组患者 · 完成率 {rate}%</Text>
     </ScrollView>
@@ -195,7 +204,7 @@ export default function FollowupCalendarHome({
 
 const s = StyleSheet.create({
   page: { paddingHorizontal: 15, paddingTop: 12, paddingBottom: 32, gap: 15, backgroundColor: theme.canvas },
-  hero: { minHeight: 166, backgroundColor: '#00B5BA', borderRadius: 26, paddingHorizontal: 22, paddingVertical: 21, overflow: 'hidden', justifyContent: 'center' },
+  hero: { minHeight: 166, backgroundColor: '#009FA9', borderRadius: 26, paddingHorizontal: 22, paddingVertical: 21, overflow: 'hidden', justifyContent: 'center', shadowColor: '#087B86', shadowOpacity: 0.13, shadowRadius: 14, elevation: 3 },
   heroCircleOne: { position: 'absolute', width: 260, height: 260, borderRadius: 130, borderWidth: 36, borderColor: 'rgba(255,255,255,0.13)', right: -82, top: -158 },
   heroCircleTwo: { position: 'absolute', width: 150, height: 150, borderRadius: 75, backgroundColor: 'rgba(3,71,92,0.19)', right: -38, bottom: -72 },
   heroDecor: { position: 'absolute', right: 26, top: 45, height: 68, width: 68, borderRadius: 21, backgroundColor: 'rgba(255,255,255,0.2)', alignItems: 'center', justifyContent: 'center', transform: [{ rotate: '-15deg' }] },
@@ -205,7 +214,7 @@ const s = StyleSheet.create({
   heroSubtitle: { color: '#F1FFFE', fontSize: 14, fontWeight: '600', marginTop: 6 },
   heroBadge: { alignSelf: 'flex-start', backgroundColor: 'rgba(255,255,255,0.16)', paddingHorizontal: 11, paddingVertical: 6, marginTop: 14, borderRadius: 18 },
   heroBadgeText: { color: '#E5FEFB', fontSize: 11, fontWeight: '600' },
-  monthSelector: { borderRadius: 21, padding: 14, flexDirection: 'row', backgroundColor: '#E9FCFC', alignItems: 'center', gap: 13 },
+  monthSelector: { borderRadius: 21, padding: 14, flexDirection: 'row', backgroundColor: '#E5F6F5', alignItems: 'center', gap: 13, borderWidth: 1, borderColor: '#D3ECEB' },
   yearColumn: { width: 80, gap: 5 },
   yearCaption: { color: '#65858B', fontSize: 11, fontWeight: '600' },
   yearText: { color: '#073544', fontWeight: '900', fontSize: 23 },
@@ -215,7 +224,7 @@ const s = StyleSheet.create({
   monthPillActive: { backgroundColor: '#009E9F' },
   monthPillText: { fontSize: 12, fontWeight: '700', color: '#38515A' },
   monthPillTextActive: { color: '#FFFFFF' },
-  calendarCard: { padding: 13, paddingTop: 19, borderRadius: 25, backgroundColor: '#FFFFFF', shadowColor: '#168C92', shadowOpacity: 0.08, shadowRadius: 18, elevation: 3 },
+  calendarCard: { padding: 13, paddingTop: 19, borderRadius: 25, backgroundColor: '#FFFFFF', borderColor: '#E7EEEE', borderWidth: 1, shadowColor: '#168C92', shadowOpacity: 0.08, shadowRadius: 18, elevation: 3 },
   calendarHeading: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 5, paddingBottom: 17 },
   calendarHeadingLeft: { flexDirection: 'row', alignItems: 'center', gap: 9 },
   headingAccent: { width: 5, height: 32, borderRadius: 3, backgroundColor: '#00BEB7' },

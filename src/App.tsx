@@ -99,6 +99,27 @@ function Label({ children, tone = 'muted' }: { children: React.ReactNode; tone?:
   return <Text style={[styles.label, tone === 'ink' && { color: theme.ink }]}>{children}</Text>;
 }
 
+function FeatureIcon({ ios, android, tint = theme.primary, size = 20 }: {
+  ios: string; android: string; tint?: string; size?: number;
+}) {
+  return <View style={styles.featureIcon}>
+    <SymbolView name={{ ios: ios as never, android: android as never, web: android as never }}
+      size={size} tintColor={tint} />
+  </View>;
+}
+
+function FeatureHeading({ title, subtitle, ios, android }: {
+  title: string; subtitle: string; ios: string; android: string;
+}) {
+  return <View style={styles.featureHeading}>
+    <FeatureIcon ios={ios} android={android} />
+    <View style={{ flex: 1 }}>
+      <Text style={styles.featureHeadingTitle}>{title}</Text>
+      <Text style={styles.featureHeadingSubtitle}>{subtitle}</Text>
+    </View>
+  </View>;
+}
+
 function Card({ children, style }: { children: React.ReactNode; style?: object }) {
   return <View style={[styles.card, style]}>{children}</View>;
 }
@@ -110,6 +131,7 @@ function PrimaryButton({
   secondary,
   danger,
   loading,
+  icon,
 }: {
   title: string;
   onPress: () => void;
@@ -117,6 +139,7 @@ function PrimaryButton({
   secondary?: boolean;
   danger?: boolean;
   loading?: boolean;
+  icon?: { ios: string; android: string };
 }) {
   return (
     <Pressable
@@ -131,7 +154,10 @@ function PrimaryButton({
       ]}
     >
       <View style={styles.buttonContent}>
-        {loading ? <ActivityIndicator size="small" color={secondary ? theme.primaryDark : '#FFFFFF'} /> : null}
+        {loading ? <ActivityIndicator size="small" color={secondary ? theme.primaryDark : '#FFFFFF'} /> : icon ? (
+          <SymbolView name={{ ios: icon.ios as never, android: icon.android as never, web: icon.android as never }}
+            size={19} tintColor={secondary ? theme.primaryDark : '#FFFFFF'} />
+        ) : null}
         <Text
           style={[
             styles.buttonText,
@@ -733,8 +759,9 @@ function PatientListPage({ onOpen }: Props) {
   );
   return (
     <ScrollView contentContainerStyle={styles.pageContent}>
-      <PageHeader title="患者档案" subtitle={patients.length + ' 位患者'} />
-      <PrimaryButton title="新增或补录患者" onPress={() => onOpen({ kind: 'patientEntry' })} />
+      <FeatureHeading title="患者档案" subtitle={patients.length + ' 位患者 · 安心管理每一份档案'} ios="person.2.fill" android="groups" />
+      <View style={styles.pageAccent} />
+      <PrimaryButton title="新增或补录患者" icon={{ ios: 'person.badge.plus', android: 'person_add' }} onPress={() => onOpen({ kind: 'patientEntry' })} />
       <TextField label="搜索患者" value={query} onChangeText={setQuery} placeholder="姓名、电话或患者编号" />
       {filtered.length === 0 ? (
         <EmptyState title={patients.length ? '没有找到匹配记录' : '还没有正式入组患者'} subtitle={patients.length ? '试试患者姓名或编号。' : '完成患者信息登记并确认同意后，患者会出现在这里。'} />
@@ -985,7 +1012,8 @@ function FollowupsPage({ onOpen, onRefresh, tasks }: Props & { tasks: FollowupTa
       contentContainerStyle={styles.followupListContent}
       ListHeaderComponent={(
         <View style={styles.followupsHeader}>
-          <PageHeader title="患者随访" subtitle="按患者查看计划和进度，点入档案处理具体节点。" />
+          <FeatureHeading title="患者随访" subtitle="每一步都有记录，每次跟进都清晰" ios="calendar.badge.clock" android="event_available" />
+          <View style={styles.pageAccent} />
           <View style={styles.filterRow}>
             {(['待办', '逾期', '已完成', '全部'] as const).map((item) => (
               <Pressable
@@ -1151,6 +1179,9 @@ function SettingsDisclosure({
         onPress={onToggle}
         style={styles.settingsDisclosureRow}
       >
+        <FeatureIcon
+          ios={title === '数据保护' ? 'externaldrive.fill.badge.checkmark' : title === '其他设置' ? 'slider.horizontal.3' : 'info.circle.fill'}
+          android={title === '数据保护' ? 'verified_user' : title === '其他设置' ? 'tune' : 'info'} />
         <View style={{ flex: 1 }}>
           <Text style={styles.cardHeading}>{title}</Text>
           <Text style={styles.settingsSubtitle}>{subtitle}</Text>
@@ -1348,26 +1379,28 @@ function SettingsPage({ onRefresh }: Props) {
   return (
     <KeyboardAvoidingView style={styles.fill} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView contentContainerStyle={styles.pageContent}>
-        <PageHeader title="我的" subtitle="提醒、数据与基本设置" />
+        <FeatureHeading title="我的" subtitle="常用功能，简单清楚" ios="gearshape.2" android="tune" />
+        <View style={styles.pageAccent} />
         {Platform.OS === 'android' ? (
           <Card>
             <View style={styles.taskTop}>
               <View style={{ flex: 1 }}>
-                <Text style={styles.cardHeading}>日历提醒</Text>
-                <Text style={styles.settingsSubtitle}>每天 09:30 / 19:00 · 同日任务共享</Text>
+                <FeatureHeading title="日历提醒" subtitle="早上 09:30、晚上 19:00 · 两次提醒" ios="calendar" android="event_available" />
               </View>
               <View style={[styles.reminderStatusDot, {
                 backgroundColor: calendarReminder?.enabled && calendarReminder.permissionGranted
                   ? theme.success : theme.accent,
               }]} />
             </View>
+            <Text style={styles.helperText}>随访当天会收到两次提示。同一天有多位患者，也只提醒两次。</Text>
             <Text style={styles.helperText}>状态：{calendarReminder?.enabled
               ? calendarReminder.permissionGranted ? '已连接手机日历' : '日历权限需重新授权'
               : '尚未连接日历'} · 已同步 {calendarReminder?.syncedDates ?? 0} 个日期</Text>
-            <Text style={styles.helperText}>提醒由手机日历投递，不包含患者姓名及数量。日历账户可能会同步日程标题和时间。</Text>
+            <Text style={styles.helperText}>不会显示患者姓名。如果用的是云日历，提醒时间可能会同步到你的日历账户。</Text>
             <View style={{ height: 10 }} />
             <PrimaryButton
               title={calendarBusy ? '正在处理…' : calendarReminder?.enabled ? '更换日历' : '连接手机日历'}
+              icon={{ ios: 'calendar.badge.plus', android: 'event_available' }}
               onPress={() => void connectCalendar()} disabled={calendarBusy} loading={calendarBusy} />
             {calendarReminder?.enabled ? (
               <View style={{ marginTop: 8 }}>
@@ -1407,18 +1440,19 @@ function SettingsPage({ onRefresh }: Props) {
           </Card>
         ) : null}
         <SettingsDisclosure
-          title="数据与备份"
-          subtitle={backupDirectoryName ? '自动加密备份 · 已选择文件夹' : '本机加密保存 · 请手动选择备份文件夹'}
+          title="数据保护"
+          subtitle={backupDirectoryName ? '加密存储 · 自动备份' : '加密存储 · 设置备份文件夹'}
           expanded={backupDetailsOpen}
           onToggle={() => setBackupDetailsOpen(value => !value)}
         >
-          <Text style={styles.helperText}>患者资料保存在本机 SQLCipher 加密数据库。外部备份仍由你手动选择文件夹；恢复旧数据请在首次创建资料前选择原备份文件夹。</Text>
+          <FeatureHeading title="守护你的数据" subtitle="患者资料加密保存，按原设置自动备份" ios="externaldrive.fill.badge.checkmark" android="verified_user" />
+          <Text style={styles.helperText}>第一次选择备份文件夹，以后会自动保存。换手机或重装时，选回原来的文件夹就可以尝试恢复。</Text>
           <Text style={styles.helperText}>备份目录：{backupDirectoryName ?? '未设置'}</Text>
           <View style={{ height: 12 }} />
           <PrimaryButton
             title={changingBackupDirectory ? '正在打开文件夹选择器…' : '选择或更改备份文件夹'}
             onPress={() => void changeBackupDirectory()} disabled={changingBackupDirectory}
-            loading={changingBackupDirectory} secondary />
+            loading={changingBackupDirectory} secondary icon={{ ios: 'folder', android: 'folder_open' }} />
         </SettingsDisclosure>
         <SettingsDisclosure
           title="其他设置"
@@ -1426,7 +1460,7 @@ function SettingsPage({ onRefresh }: Props) {
           expanded={otherDetailsOpen}
           onToggle={() => setOtherDetailsOpen(value => !value)}
         >
-          <Text style={styles.cardHeading}>操作人信息</Text>
+          <FeatureHeading title="操作人" subtitle="登记时自动留下操作记录" ios="person.crop.circle" android="badge" />
           <TextField label="登记操作人" value={actor} onChangeText={setActor} placeholder="用于本机审计记录" />
           <View style={{ height: 8 }} />
           <PrimaryButton title={saved ? '已保存' : '保存操作人'} onPress={() => void save()} secondary />
@@ -1434,8 +1468,7 @@ function SettingsPage({ onRefresh }: Props) {
             <View style={{ marginTop: 16 }}>
               <View style={styles.taskTop}>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.cardHeading}>顶部随访监测</Text>
-                  <Text style={styles.settingsSubtitle}>可选 · 仅显示紧凑统计横幅，不负责日历提醒</Text>
+                  <FeatureHeading title="顶部监测" subtitle="通知栏显示待办数量，随时可以关闭" ios="waveform.path.ecg" android="monitor_heart" />
                 </View>
                 <Switch value={monitorState.enabled} disabled={monitorBusy}
                   onValueChange={value => void toggleMonitor(value)}
@@ -1466,7 +1499,7 @@ function SettingsPage({ onRefresh }: Props) {
           expanded={aboutDetailsOpen}
           onToggle={() => setAboutDetailsOpen(value => !value)}
         >
-          <InfoLine label="应用版本" value="2.0.16-preview" />
+          <InfoLine label="应用版本" value="2.0.17-preview" />
           <InfoLine label="研究方案" value={STUDY_PROTOCOL_VERSION} />
           <Text style={styles.helperText}>患者登记为两步流程。正式知情同意与资格审查仍须按研究方案执行。</Text>
         </SettingsDisclosure>
@@ -1485,32 +1518,70 @@ function LoadingView({ label }: { label: string }) {
   );
 }
 
+function PermissionGuide({ calendarMissing, calendarAuthorized, notificationMissing, busy, onCalendar, onMonitor, onDismiss }: {
+  calendarMissing: boolean; calendarAuthorized: boolean; notificationMissing: boolean; busy: boolean;
+  onCalendar: () => void; onMonitor: () => void; onDismiss: () => void;
+}) {
+  return <Modal visible transparent animationType="fade" onRequestClose={onDismiss}>
+    <View style={styles.permissionOverlay}>
+      <View style={styles.permissionPanel}>
+        <ScrollView contentContainerStyle={{ gap: 13 }} showsVerticalScrollIndicator={false}>
+        <FeatureHeading title="让今日随访为你做好提醒" subtitle="只需要简单开启一次，已授权的功能不再打扰你" ios="checkmark.shield.fill" android="verified_user" />
+        <Text style={styles.permissionIntro}>这些权限只用于提醒和顶部统计，不会把患者资料发送到外部。</Text>
+        {calendarMissing ? <View style={styles.permissionItem}>
+          <FeatureHeading title="① 日历提醒" subtitle="有随访任务时，上午 9:30 和晚上 7:00 提醒你" ios="calendar.badge.clock" android="event_available" />
+          <Text style={styles.helperText}>{calendarAuthorized ? '日历已允许访问，点击连接后会优先使用手机本地日历。' : '点下面的按钮，手机会询问是否允许使用日历，请选择「允许」。'}</Text>
+          <PrimaryButton title={calendarAuthorized ? '连接日历提醒' : '开启日历提醒'} icon={{ ios: 'calendar', android: 'calendar_month' }} loading={busy} disabled={busy} onPress={onCalendar} />
+        </View> : null}
+        {notificationMissing ? <View style={styles.permissionItem}>
+          <FeatureHeading title="② 顶部监测" subtitle="通知栏随时看到待随访和完成情况" ios="bell.badge" android="notifications_active" />
+          <Text style={styles.helperText}>点下面的按钮并允许通知，就能看到一条简洁的统计横幅；不需要时可以在「我的」关闭。</Text>
+          <PrimaryButton title="允许通知并开启监测" icon={{ ios: 'bell', android: 'notifications' }} loading={busy} disabled={busy} onPress={onMonitor} />
+        </View> : null}
+        <PrimaryButton title="稍后再说，先进入应用" secondary disabled={busy} onPress={onDismiss} />
+        <Text style={styles.permissionFootnote}>你可以先使用患者和随访功能。下次进入时，缺少的授权会再次提醒。</Text>
+        </ScrollView>
+      </View>
+    </View>
+  </Modal>;
+}
+
 function BackupAccessGate({ busy, onRequest, onSkip }: { busy: boolean; onRequest: () => void; onSkip: () => void }) {
   return (
     <SafeAreaView style={styles.safe}>
       <StatusBar barStyle="dark-content" />
       <ScrollView contentContainerStyle={styles.pageContent}>
-        <PageHeader title="数据恢复（可选）" subtitle="如果你正在换机或重新安装，可以先恢复旧数据。首次使用可以跳过。" />
+        <FeatureHeading title="欢迎使用今日随访" subtitle="先确认是否有以前的患者资料" ios="externaldrive.fill.badge.checkmark" android="shield" />
+        <View style={styles.pageAccent} />
         <Card>
-          <Text style={styles.cardHeading}>目录级授权</Text>
-          <Text style={styles.bodyText}>
-            如果已有研伴旧备份，请先在系统文件夹选择器中选定原备份文件夹。旧版本备份通常位于 Downloads/_.yanban-patient-followup；
-            也可以新建一个文件夹。患者数据库和附件会加密后保存，备份仅用于本机恢复，不会上传。
-          </Text>
-          <Text style={styles.helperText}>
-            Android 只会把你选定的文件夹及其子目录授权给研伴。建议选择专用文件夹，不要选包含其他无关文件的宽泛目录。
-          </Text>
-          <View style={{ height: 12 }} />
-          <PrimaryButton
-            title={busy ? '正在打开文件夹选择器…' : '选择文件夹并尝试恢复'}
-            onPress={onRequest}
-            disabled={busy}
-          />
+          <FeatureHeading title="有旧数据？先找回来" subtitle="换手机或重新安装，请先恢复再登记新患者" ios="arrow.clockwise.icloud" android="restore" />
+          <View style={styles.backupStep}>
+            <Text style={styles.backupStepNo}>1</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.backupStepTitle}>打开备份文件夹</Text>
+              <Text style={styles.helperText}>点击下方按钮，找到之前存放备份的文件夹。</Text>
+            </View>
+          </View>
+          <View style={styles.backupStep}>
+            <Text style={styles.backupStepNo}>2</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.backupStepTitle}>点击「使用此文件夹」</Text>
+              <Text style={styles.helperText}>手机会请你确认授权，选择「允许」即可。</Text>
+            </View>
+          </View>
+          <View style={styles.backupStep}>
+            <Text style={styles.backupStepNo}>3</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.backupStepTitle}>自动查找旧资料</Text>
+              <Text style={styles.helperText}>今日随访会尝试恢复，不需要逐个选择备份文件。</Text>
+            </View>
+          </View>
+          <PrimaryButton title={busy ? '正在打开文件夹…' : '选择备份文件夹，恢复旧资料'}
+            icon={{ ios: 'folder', android: 'folder_open' }}
+            onPress={onRequest} disabled={busy} loading={busy} />
           <View style={{ height: 10 }} />
-          <PrimaryButton title="没有旧备份，直接开始" onPress={onSkip} secondary disabled={busy} />
-          <Text style={styles.privacyNote}>
-            卸载后 Android 会撤销目录授权。重新安装后，请重新选择同一个文件夹；备份会自动识别，不需要逐个选择文件。
-          </Text>
+          <PrimaryButton title="第一次使用，没有旧资料" secondary onPress={onSkip} disabled={busy} />
+          <Text style={styles.privacyNote}>没有旧备份可以直接开始。以后可到「我的 → 数据保护」选择文件夹进行自动加密备份。</Text>
         </Card>
       </ScrollView>
     </SafeAreaView>
@@ -1551,6 +1622,10 @@ export default function App() {
   const [todayContacts, setTodayContacts] = useState<DueFollowupContact[]>([]);
   const [briefingVisible, setBriefingVisible] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [permissionGuide, setPermissionGuide] = useState<{ calendar: boolean; calendarAuthorized: boolean; notification: boolean } | null>(null);
+  const [permissionBusy, setPermissionBusy] = useState(false);
+  const permissionCheckRunning = useRef(false);
+  const permissionLastPrompt = useRef(0);
   // Show on the first unlocked app launch. Re-show on re-entry only if the
   // app has been away for at least two minutes (never on return from dialer).
   const briefingPendingRef = useRef(true);
@@ -1559,6 +1634,92 @@ export default function App() {
   const skipNextResumeBriefingRef = useRef(false);
   const initializationInProgress = useRef(false);
   const initializationComplete = useRef(false);
+
+  // The patient data screen must load first. Inspect permissions without
+  // blocking rendering; Android system permission prompts require user intent.
+  const inspectPermissions = useCallback(async (showGuide = true) => {
+    if (Platform.OS !== 'android' || permissionCheckRunning.current) return;
+    permissionCheckRunning.current = true;
+    try {
+      const status = await calendarReminderStatus();
+      const calendarMissing = !status?.permissionGranted || !status.enabled;
+      const notificationMissing = Number(Platform.Version) >= 33 &&
+        !(await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS));
+      if (showGuide && (calendarMissing || notificationMissing) &&
+        Date.now() - permissionLastPrompt.current > 12000) {
+        permissionLastPrompt.current = Date.now();
+        setPermissionGuide({ calendar: calendarMissing, calendarAuthorized: Boolean(status?.permissionGranted), notification: notificationMissing });
+      } else if (!calendarMissing && !notificationMissing) {
+        setPermissionGuide(null);
+      }
+    } catch (error) {
+      console.warn('Permission review failed:', error);
+    } finally {
+      permissionCheckRunning.current = false;
+    }
+  }, []);
+
+  const dismissPermissionGuide = useCallback(() => {
+    permissionLastPrompt.current = Date.now();
+    setPermissionGuide(null);
+  }, []);
+
+  const grantCalendarFromGuide = async () => {
+    if (permissionBusy) return;
+    setPermissionBusy(true);
+    try {
+      if (!(await requestCalendarAccess())) {
+        Alert.alert('日历还没有开启', '请在手机的应用设置中，找到「今日随访 → 权限 → 日历」，选择「允许」。', [
+          { text: '稍后', style: 'cancel' },
+          { text: '打开手机设置', onPress: () => void Linking.openSettings() },
+        ]);
+        return;
+      }
+      const calendars = preferredWritableCalendars(await writableCalendars());
+      const local = calendars.find(item => item.isLocal);
+      if (!local) {
+        Alert.alert('再完成一步', '已经允许使用日历。请打开「我的 → 日历提醒」，选择你平时使用的日历。');
+        setPermissionGuide(current => current ? { ...current, calendar: false } : null);
+        return;
+      }
+      await configureCalendarReminder(local.id, true);
+      await refreshLocalReminders();
+      setPermissionGuide(current => current ? { ...current, calendar: false } : null);
+    } catch (error) {
+      Alert.alert('日历提醒还没设置好', error instanceof Error ? error.message : '可以到「我的」重新连接日历。');
+    } finally {
+      setPermissionBusy(false);
+    }
+  };
+
+  const grantMonitorFromGuide = async () => {
+    if (permissionBusy) return;
+    setPermissionBusy(true);
+    try {
+      if (Number(Platform.Version) >= 33) {
+        const result = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS);
+        if (result !== PermissionsAndroid.RESULTS.GRANTED) {
+          Alert.alert('还没有打开通知', '请到手机的应用设置中，允许「今日随访」显示通知。', [
+            { text: '稍后', style: 'cancel' },
+            { text: '打开手机设置', onPress: () => void Linking.openSettings() },
+          ]);
+          return;
+        }
+      }
+      // The button explicitly opts in to the optional persistent monitor.
+      await setBackgroundMonitorEnabled(true);
+      await syncBackgroundMonitorSnapshot().catch(() => undefined);
+      setPermissionGuide(current => current ? { ...current, notification: false } : null);
+    } catch (error) {
+      Alert.alert('顶部监测未开启', error instanceof Error ? error.message : '可以稍后到「我的」重试。');
+    } finally {
+      setPermissionBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    if (ready) void inspectPermissions();
+  }, [ready, inspectPermissions]);
 
   const refresh = useCallback(async (forceReminderReschedule = false) => {
     try {
@@ -1702,10 +1863,11 @@ export default function App() {
         }
         skipNextResumeBriefingRef.current = false;
         void checkBackupAccessAndInitialize();
+        if (ready) void inspectPermissions();
       }
     });
     return () => subscription.remove();
-  }, [checkBackupAccessAndInitialize]);
+  }, [checkBackupAccessAndInitialize, ready, inspectPermissions]);
 
   const openTodayBriefing = async () => {
     try {
@@ -1825,18 +1987,39 @@ export default function App() {
       <View style={styles.fill}>{content}</View>
       {page.kind === 'tab' ? <TabBar active={tab} onChange={goTab} /> : null}
       <TodayFollowupDialog
-        visible={briefingVisible}
+        visible={briefingVisible && !permissionGuide}
         contacts={todayContacts}
         onClose={() => setBriefingVisible(false)}
         onDial={(phone) => { void openPatientDialer(phone); }}
         onOpenTask={openBriefingTask}
       />
+      {permissionGuide && (permissionGuide.calendar || permissionGuide.notification) ? (
+        <PermissionGuide calendarMissing={permissionGuide.calendar} calendarAuthorized={permissionGuide.calendarAuthorized}
+          notificationMissing={permissionGuide.notification} busy={permissionBusy}
+          onCalendar={() => void grantCalendarFromGuide()}
+          onMonitor={() => void grantMonitorFromGuide()}
+          onDismiss={dismissPermissionGuide} />
+      ) : null}
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
 
+  // Calm healthcare visuals: large touch targets, icon-led cards and plain language.
+  featureIcon: { width: 43, height: 43, borderRadius: 14, backgroundColor: '#E5F7F3', alignItems: 'center', justifyContent: 'center', marginRight: 12 },
+  featureHeading: { flexDirection: 'row', alignItems: 'center', minHeight: 44, marginVertical: 2 },
+  featureHeadingTitle: { fontSize: 18, fontWeight: '800', color: '#103A45', letterSpacing: 0.1 },
+  featureHeadingSubtitle: { fontSize: 12, color: '#6B858C', lineHeight: 18, marginTop: 3 },
+  pageAccent: { width: 44, height: 4, backgroundColor: '#13B8AD', borderRadius: 4, marginTop: -7, marginBottom: 2, marginLeft: 55 },
+  permissionOverlay: { flex: 1, backgroundColor: 'rgba(9,36,44,0.57)', justifyContent: 'center', padding: 20 },
+  permissionPanel: { backgroundColor: '#FFFFFF', borderRadius: 24, padding: 20, maxHeight: '92%', gap: 13, shadowOpacity: 0.2, shadowColor: '#062A30', shadowRadius: 20, elevation: 13 },
+  permissionIntro: { color: '#587781', lineHeight: 20, fontSize: 13 },
+  permissionItem: { borderRadius: 17, backgroundColor: '#F7FBFA', padding: 13, borderColor: '#E0ECEB', borderWidth: 1, gap: 9 },
+  permissionFootnote: { fontSize: 11, color: '#789098', textAlign: 'center', lineHeight: 17 },
+  backupStep: { flexDirection: 'row', gap: 12, paddingVertical: 10, alignItems: 'flex-start', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#DEEAE9' },
+  backupStepNo: { width: 28, height: 28, borderRadius: 14, backgroundColor: '#C8F1E8', overflow: 'hidden', color: '#006F6C', fontWeight: '800', textAlign: 'center', textAlignVertical: 'center', paddingTop: 4 },
+  backupStepTitle: { fontSize: 14, fontWeight: '800', color: '#103A45' },
   // V2.0.11 calendar-first visual system: shared surfaces and navigation.
   // These styles are reused by patient, follow-up, screening, record and settings pages.
   yanbanBottomAccent: { height: 3, width: 28, backgroundColor: '#00A9A6', borderRadius: 2 },
@@ -1918,7 +2101,7 @@ const styles = StyleSheet.create({
   brandMarkText: { color: '#FFFFFF', fontSize: 18, fontWeight: '800' },
   brandName: { color: '#083A45', fontSize: 21, fontWeight: '900', letterSpacing: 1.0 },
   brandCaption: { color: '#66969B', fontSize: 10, fontWeight: '600', marginTop: 1 },
-  pageContent: { paddingHorizontal: 16, paddingTop: 18, paddingBottom: 36, gap: 15 },
+  pageContent: { paddingHorizontal: 17, paddingTop: 20, paddingBottom: 40, gap: 17 },
   hero: { padding: 20, borderRadius: 20, backgroundColor: theme.primarySoft },
   homeTitleBlock: { paddingBottom: 2, gap: 4 },
   homeTitle: { color: theme.ink, fontSize: 28, lineHeight: 36, fontWeight: '700' },
@@ -1934,7 +2117,7 @@ const styles = StyleSheet.create({
   eyebrow: { color: theme.primaryDark, letterSpacing: 0.3, fontSize: 12, fontWeight: '700' },
   heroTitle: { color: theme.ink, ...typeScale.pageTitle, marginTop: 8 },
   heroCopy: { color: theme.muted, fontSize: 16, lineHeight: 24, marginTop: 7, marginBottom: 18 },
-  card: { backgroundColor: theme.paper, borderRadius: 21, padding: 19, borderWidth: 0, shadowColor: '#208C95', shadowOpacity: 0.05, shadowRadius: 12, elevation: 2 },
+  card: { backgroundColor: theme.paper, borderRadius: 21, padding: 18, borderWidth: 1, borderColor: '#ECF2F2', shadowColor: '#217B88', shadowOpacity: 0.06, shadowRadius: 15, shadowOffset: { width: 0, height: 5 }, elevation: 2 },
   entryCard: { padding: 20, minHeight: 190 },
   entryIcon: { width: 48, height: 48, borderRadius: 14, backgroundColor: theme.primarySoft, alignItems: 'center', justifyContent: 'center', marginBottom: 12 },
   entryTitle: { color: theme.ink, fontSize: 18, lineHeight: 25, fontWeight: '600' },
@@ -1983,8 +2166,8 @@ const styles = StyleSheet.create({
   calendarDayText: { color: theme.ink, fontSize: 14, fontWeight: '600' },
   calendarDayTextSelected: { color: '#FFFFFF', fontWeight: '700' },
   calendarHint: { color: theme.muted, fontSize: 13, textAlign: 'right', marginTop: 7 },
-  button: { backgroundColor: theme.primary, borderRadius: 15, minHeight: 52, paddingHorizontal: 16, alignItems: 'center', justifyContent: 'center' },
-  buttonSecondary: { backgroundColor: theme.primarySoft },
+  button: { backgroundColor: theme.primary, borderRadius: 16, minHeight: 52, paddingHorizontal: 16, alignItems: 'center', justifyContent: 'center', shadowColor: '#108B87', shadowOpacity: 0.12, shadowRadius: 8, elevation: 1 },
+  buttonSecondary: { backgroundColor: '#E6F8F4', shadowOpacity: 0, elevation: 0 },
   buttonDanger: { backgroundColor: theme.danger },
   buttonDisabled: { opacity: 0.55 },
   buttonContent: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },

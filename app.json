@@ -3,7 +3,7 @@
     "name": "今日随访",
     "slug": "patient-followup-local",
     "scheme": "patientfollowup",
-    "version": "2.0.16",
+    "version": "2.0.17",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
@@ -13,7 +13,7 @@
     },
     "android": {
       "package": "com.local.patientfollowup",
-      "versionCode": 32,
+      "versionCode": 33,
       "permissions": [
         "android.permission.READ_CALENDAR",
         "android.permission.WRITE_CALENDAR",
