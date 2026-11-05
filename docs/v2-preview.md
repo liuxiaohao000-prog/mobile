@@ -228,3 +228,27 @@ Android 13+ 的 `POST_NOTIFICATIONS` 只决定是否允许发送通知；高重�
 - Expo `app.json=2.0.15`，`package.json` / lockfile `2.0.15-preview`；Android `versionCode=31`、`versionName=2.0.15-preview`，GitHub release `v2.0.15-preview.<run number>`。
 - 真机检查：老 09:00 日程迁移；同一天多人两条；09:30 已过但 19:00 未过时只补晚上；最后一名患者退出删除当日两条；一人退出但另一人有效时保留；用户复制相同标题事件不删除；日历手动删事件后补齐；完成当日随访取消晚间日程；冷启动和返回 App 不等待日历同步，患者记录完整；覆盖升级保留本机加密资料。
 - 仍仅为内部 Preview。请先备份，直接覆盖安装，**不要先卸载旧版 App**。
+
+## V2.0.16：更名「今日随访」、日历独立提醒、简洁设置与紧凑监测（基于 V2.0.15）
+
+### 保留与移除
+- Android 应用桌面名称、首页品牌及用户可见的守护通知更名为 **今日随访**，Android applicationId/包名仍为 `com.local.patientfollowup`；SQLCipher 数据库、SecureStore 密钥、患者入组/退出/随访和拨号不迁移。考虑日程安全归属验证，已有正式日历事件标题仍沿用 `研伴 · 今日随访提醒`，避免批量改名导致无法安全识别。
+- **系统日历是唯一正式提醒源**：保留 09:30/19:00、按日期去重、入组/退出等待核对、打开 App 异步补齐、多余日程只删除研伴记录且验证成功的事件。日历仍需 `READ_CALENDAR` 与 `WRITE_CALENDAR`，在用户连接日历时请求权限；日历应用自行负责系统通知和铃声。
+- 删除老 Android AlarmManager 正式日程调度、广播投递、震动前台服务、通知诊断与一分钟测试，移除 `expo-notifications` JS 包及插件。升级初始化保留一次性旧 PendingIntent 清理和旧提醒渠道移除，防止上版闹钟与日历重复；不触碰日历已写入事件。
+- Manifest 移除 `SCHEDULE_EXACT_ALARM`、`REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`、`FOREGROUND_SERVICE_SYSTEM_EXEMPTED`、`VIBRATE`、旧震动服务/提醒接收器；保留 `POST_NOTIFICATIONS`（只为用户主动开启的顶部监测）、`FOREGROUND_SERVICE`、`FOREGROUND_SERVICE_SPECIAL_USE` 和 `RECEIVE_BOOT_COMPLETED`（独立监测重启后恢复），以及日历权限。监测通知渠道与系统日历通知权限不相同。
+- 监测通知仍由独立 `:followup_guard` 进程保持；折叠和展开采用同一个 `yanban_monitor_compact` RemoteViews 样式，删除不美观的扩展统计卡与原通知内操作按钮，点击短横幅进入 App，监测开关在「其他设置」。原监测接收器升级为独立 `FollowupMonitorBootReceiver` 监听系统启动/应用更新等事件，独立于已移除的原生闹钟链路。
+
+### 「我的」精简
+- 一目了然的日历状态、连接或更换可写日历、立即同步日程；测试日历提醒缩为可选入口，不显示旧闹钟调试界面。
+- 数据与备份独立折叠区域，保留现有手动选择文件夹、显示已授权目录和加密备份提醒。
+- 操作人和可选顶部监测组合于「其他设置」，监测开启时在 Android 13+ 按需请求通知权限；未授权时不声称已开启横幅，也不会影响系统日历。
+- 关于页展示 `2.0.16-preview`、研究方案及隐私提醒。未启用系统日历时提示用户连接日历，不再默默启用不可靠的本机闹钟。
+
+### 备份明确不变
+- `PatientAutoBackupModule.kt`、`services/automaticBackup.ts`、`services/backup.ts`、`storage/database.ts` 保持原样，继续通过系统 SAF 文件夹选择器获取可持续授权。自动备份、旧数据恢复和 SQLCipher 密钥保持既有协议。**不在公共存储根目录创建「今日随访」文件夹、不尝试无授权恢复**。
+- 使用前请先备份，覆盖升级保留原患者数据库；若卸载 App，本机加密数据库及 SecureStore 密钥可能丢失，必须使用完整可恢复的备份流程。
+
+### 版本与测试
+- Expo `2.0.16`，npm package/lock `2.0.16-preview`，Android `versionCode=32` / `versionName=2.0.16-preview`，GitHub Actions 标签 `v2.0.16-preview.<run number>`。
+- 核对 Android APK 编译、`npm ci`、TypeScript、文档；真机检查日历原有事件仍在、09:30/19:00 通知、无误删用户手动创建的日程、升级后旧原生闹钟不再弹出、应用桌面新名称、监测紧凑横幅无法变成大卡、用户主动开启监测时通知授权、监测关闭不影响日历、备份路径及历史患者仍能打开。
+- 本版不承诺系统日历持续响铃；真机行为仍由手机日历应用的通知和响铃设置决定。不得以 APK 编译成功代替真机测试。
