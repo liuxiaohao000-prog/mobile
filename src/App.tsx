@@ -1881,6 +1881,9 @@ function SettingsPage({ onRefresh }: Props) {
   const [operatorDetailsOpen, setOperatorDetailsOpen] = useState(false);
   const [aboutDetailsOpen, setAboutDetailsOpen] = useState(false);
   const [configuringReminders, setConfiguringReminders] = useState(false);
+  // Only ask for a channel-settings review once per settings-page visit.
+  // Android does not expose a runtime permission to enable heads-up or lock-screen display.
+  const channelReviewPrompted = useRef(false);
   const [backupDirectoryName, setBackupDirectoryName] = useState<string | null>(null);
   const [changingBackupDirectory, setChangingBackupDirectory] = useState(false);
   const refreshMonitorStatus = useCallback(async () => {
@@ -1982,10 +1985,17 @@ function SettingsPage({ onRefresh }: Props) {
           ]);
           return;
         }
-        if (!diagnostics.highImportance || !diagnostics.vibrationEnabled) {
-          Alert.alert('还需完成通知渠道设置', '请在系统页面为“患者随访提醒”开启通知、横幅和震动。完成后返回本页，再点“继续配置”检查。', [
+        if (!diagnostics.notificationsEnabled || !diagnostics.highImportance || !diagnostics.vibrationEnabled) {
+          Alert.alert('还需完成通知渠道设置', '请为“患者随访提醒”开启允许通知、横幅（悬浮通知）、锁屏显示与震动，并选择响铃或重要通知。Android 不允许 App 代替你打开这些系统开关。', [
             { text: '稍后', style: 'cancel' },
-            { text: '打开通知渠道', onPress: () => void openNotificationSettings() },
+            { text: '打开通知渠道', onPress: () => { channelReviewPrompted.current = true; void openNotificationSettings(); } },
+          ]);
+          return;
+        }
+        if (!channelReviewPrompted.current) {
+          Alert.alert('请确认横幅与锁屏显示', '基础通知权限已经通过。但 Android 的横幅、锁屏展示通常是独立系统设置，无法由研伴自动申请或修改。请进入“患者随访提醒”通知渠道，打开横幅（悬浮通知）、锁屏显示和震动；返回后可重新检查并发送测试通知。', [
+            { text: '稍后', style: 'cancel' },
+            { text: '打开通知渠道', onPress: () => { channelReviewPrompted.current = true; void openNotificationSettings(); } },
           ]);
           return;
         }
@@ -2004,7 +2014,7 @@ function SettingsPage({ onRefresh }: Props) {
       await refreshNotificationPermissions();
       Alert.alert(
         '提醒设置已检查',
-        '通知、精确提醒和可读取的通知渠道设置均已满足。部分手机厂商的自启动设置无法由 App 读取；如果后台提醒仍受影响，请在系统应用设置中允许研伴后台运行。',
+        '通知、精确提醒和可读取的通知渠道设置均已满足。请另外确认系统“横幅/悬浮通知”和“锁屏显示”已开启；这两项设置可能无法由 App 读取。部分手机厂商的自启动设置也需手动允许。',
       );
     } catch (error) {
       Alert.alert('提醒设置未完成', error instanceof Error ? error.message : '请检查系统通知和闹钟设置后重试。');
@@ -2129,8 +2139,13 @@ function SettingsPage({ onRefresh }: Props) {
                 : '基础提醒权限已开启'}
           </Text>
           <Text style={styles.helperText}>
-            每日提醒使用系统闹钟。通知和精确闹钟授权不等于息屏后台一定能投递；请检查下方后台运行授权。
+            每日提醒使用系统闹钟。允许通知后，还需要到系统“患者随访提醒”渠道检查横幅（悬浮通知）、锁屏显示和震动；这些开关不能由 App 自动打开。息屏投递还受后台策略影响。
           </Text>
+          {Platform.OS === 'android' ? (
+            <View style={{ marginTop: 10, marginBottom: 4 }}>
+              <PrimaryButton title="检查横幅、锁屏和震动设置" onPress={() => { channelReviewPrompted.current = true; void openNotificationSettings(); }} secondary />
+            </View>
+          ) : null}
           <View style={{ height: 14 }} />
           <PrimaryButton
             title={configuringReminders ? '正在检查…' : reminderReady ? '检查提醒状态' : '开启随访提醒'}
@@ -2249,7 +2264,8 @@ function SettingsPage({ onRefresh }: Props) {
                   </Text>
                   <Text style={styles.helperText}>后台限制：{reminderDiagnostics ? reminderDiagnostics.backgroundRestricted ? '系统已限制' : '未报告限制' : '未知'} · 电池优化豁免：{reminderDiagnostics?.batteryOptimizationExempt ? '已获得' : '未获得'}</Text>
                   <Text style={styles.helperText}>Android 待机分组：{standbyBucketLabel(reminderDiagnostics?.appStandbyBucket)}（厂商后台策略可能不同）</Text>
-                  <Text style={styles.helperText}>系统通知：{reminderDiagnostics?.notificationsEnabled ? '允许' : '受限'} · 通道重要级别：{reminderDiagnostics?.channelImportance ?? '未知'}（横幅需要至少 4）</Text>
+                  <Text style={styles.helperText}>系统通知：{reminderDiagnostics?.notificationsEnabled ? '允许' : '受限'} · 通道重要级别：{reminderDiagnostics?.channelImportance ?? '未知'}（横幅通常需要至少 4）</Text>
+                  <Text style={styles.helperText}>通知渠道锁屏可见性：{reminderDiagnostics ? reminderDiagnostics.channelLockscreenVisibility === 1 ? '公开（渠道请求）' : '受限或隐藏' : '未读取'}。实际锁屏显示还取决于系统全局锁屏通知设置，App 不能代替用户开启。</Text>
                 </>
               ) : null}
               {reminderDiagnostics && reminderDiagnostics.testScheduledAt > 0 ? (
