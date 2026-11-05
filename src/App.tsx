@@ -62,7 +62,7 @@ import { dateKey, formatLocalDateTime, parseLocalDate, parseLocalDateTime } from
 import { STUDY_PROTOCOL_VERSION } from './config/studyProtocol';
 import { theme, typeScale } from './theme';
 import FollowupCalendarHome from './FollowupCalendarHome';
-import { calendarReminderStatus, requestCalendarAccess, writableCalendars, configureCalendarReminder, preferredWritableCalendars, createCalendarRingingTest, openCalendarRingingTest, type WritableCalendar, type CalendarReminderStatus } from './services/calendarReminders';
+import { calendarReminderStatus, requestCalendarAccess, writableCalendars, configureCalendarReminder, preferredWritableCalendars, createCalendarRingingTest, openCalendarRingingTest, type CalendarReminderStatus } from './services/calendarReminders';
 import {
   EMPTY_CLINICAL_INFO,
   type DashboardSummary,
@@ -1252,8 +1252,6 @@ function SettingsDisclosure({
 function SettingsPage({ onRefresh }: Props) {
   const [calendarReminder, setCalendarReminder] = useState<CalendarReminderStatus | null>(null);
   const [calendarBusy, setCalendarBusy] = useState(false);
-  const [calendarOptions, setCalendarOptions] = useState<WritableCalendar[]>([]);
-  const [calendarAdvanced, setCalendarAdvanced] = useState(false);
   const [calendarTestCreated, setCalendarTestCreated] = useState(false);
   const [monitorState, setMonitorState] = useState<BackgroundMonitorState>({
     enabled: false, running: false, lastError: '', lastStartedAt: 0,
@@ -1296,50 +1294,29 @@ function SettingsPage({ onRefresh }: Props) {
     setCalendarBusy(true);
     try {
       if (!(await requestCalendarAccess())) {
-        Alert.alert('需要日历权限', '请允许今日随访读取和写入日历，以创建和核对随访日程。');
+        Alert.alert('请允许完整日历权限', '请选择「允许」或「完全允许」。不要选择「只允许创建」，否则无法核对或删除旧随访日程。');
         return;
       }
       const calendars = await writableCalendars();
       const ordinary = preferredWritableCalendars(calendars);
-      setCalendarOptions(ordinary);
       if (!calendars.length) {
         Alert.alert('找不到可写日历', '请先在手机日历中新建一个普通日程或本地日历，然后重试。');
         return;
       }
-      if (calendarReminder?.enabled) {
-        setCalendarAdvanced(true);
-        return;
+      if (!calendarReminder?.enabled) {
+        const selected = ordinary.find(item => item.isLocal) ?? ordinary[0];
+        if (!selected) {
+          Alert.alert('日历还未连接', '手机没有找到可用的普通日历，请先打开系统日历，创建一个日历后重新进入今日随访。');
+          return;
+        }
+        await configureCalendarReminder(selected.id, true);
       }
-      const local = ordinary.find(item => item.isLocal);
-      if (!local) {
-        setCalendarAdvanced(true);
-        Alert.alert('请选择普通日历', '没有发现手机本地日历，请从列表中选择你日常使用的日历。');
-        return;
-      }
-      await configureCalendarReminder(local.id, true);
       await refreshLocalReminders();
       await onRefresh();
       await refreshCalendarStatus();
       Alert.alert('日历提醒已连接', '未来随访日程已核对，上午 09:30 和晚上 19:00 分别通知。');
     } catch (error) {
       Alert.alert('日历设置失败', error instanceof Error ? error.message : '请检查日历权限和账户。');
-    } finally {
-      setCalendarBusy(false);
-    }
-  };
-
-  const chooseCalendar = async (calendar: WritableCalendar) => {
-    if (calendarBusy) return;
-    setCalendarBusy(true);
-    try {
-      await configureCalendarReminder(calendar.id, true);
-      await refreshLocalReminders();
-      await onRefresh();
-      await refreshCalendarStatus();
-      setCalendarAdvanced(false);
-      Alert.alert('已更换日历', '未来随访的 09:30 与 19:00 日程已同步。');
-    } catch (error) {
-      Alert.alert('无法切换日历', error instanceof Error ? error.message : '请检查手机日历设置。');
     } finally {
       setCalendarBusy(false);
     }
@@ -1432,34 +1409,22 @@ function SettingsPage({ onRefresh }: Props) {
               }]} />
             </View>
             <Text style={styles.helperText}>随访当天会收到两次提示。同一天有多位患者，也只提醒两次。</Text>
+            {!calendarReminder?.permissionGranted || !calendarReminder?.enabled ? (
+              <Text style={styles.calendarPermissionWarning}>授权日历时，请选择「允许」或「完全允许」！不要选「只允许创建」，否则可能无法删除已取消的提醒。</Text>
+            ) : null}
             <Text style={styles.helperText}>状态：{calendarReminder?.enabled
               ? calendarReminder.permissionGranted ? '已连接手机日历' : '日历权限需重新授权'
               : '尚未连接日历'} · 已同步 {calendarReminder?.syncedDates ?? 0} 个日期</Text>
             <Text style={styles.helperText}>不会显示患者姓名。如果用的是云日历，提醒时间可能会同步到你的日历账户。</Text>
             <View style={{ height: 10 }} />
             <PrimaryButton
-              title={calendarBusy ? '正在处理…' : calendarReminder?.enabled ? '更换日历' : '连接手机日历'}
+              title={calendarBusy ? '正在处理…' : calendarReminder?.enabled ? '检查日历连接' : '开启手机日历提醒'}
               icon={{ ios: 'calendar.badge.plus', android: 'event_available' }}
               onPress={() => void connectCalendar()} disabled={calendarBusy} loading={calendarBusy} />
             {calendarReminder?.enabled ? (
               <View style={{ marginTop: 8 }}>
                 <PrimaryButton title="立即同步随访日历" secondary disabled={calendarBusy}
                   onPress={() => void resyncCalendar()} />
-              </View>
-            ) : null}
-            {calendarAdvanced ? (
-              <View style={{ marginTop: 12 }}>
-                <Text style={styles.cardHeading}>选择日历</Text>
-                {calendarOptions.map(item => (
-                  <Pressable key={item.id} accessibilityRole="button" disabled={calendarBusy}
-                    onPress={() => void chooseCalendar(item)}
-                    style={[styles.calendarOptionRow, item.id === calendarReminder?.calendarId && styles.calendarOptionSelected]}>
-                    <Text style={styles.calendarOptionName}>{item.isLocal ? '手机本地日历' : item.name}</Text>
-                    <Text style={styles.helperText}>{item.isLocal ? '推荐 · 本地' : '账户日历 · 可能云同步'}
-                      {item.id === calendarReminder?.calendarId ? ' · 已选' : ''}</Text>
-                  </Pressable>
-                ))}
-                <PrimaryButton title="收起日历列表" secondary onPress={() => setCalendarAdvanced(false)} />
               </View>
             ) : null}
             {calendarReminder?.enabled ? (
@@ -1565,7 +1530,8 @@ function PermissionGuide({ calendarMissing, calendarAuthorized, notificationMiss
         <Text style={styles.permissionIntro}>这些权限只用于提醒和顶部统计，不会把患者资料发送到外部。</Text>
         {calendarMissing ? <View style={styles.permissionItem}>
           <FeatureHeading title="① 日历提醒" subtitle="有随访任务时，上午 9:30 和晚上 7:00 提醒你" ios="calendar.badge.clock" android="event_available" />
-          <Text style={styles.helperText}>{calendarAuthorized ? '日历已允许访问，点击连接后会优先使用手机本地日历。' : '点下面的按钮，手机会询问是否允许使用日历，请选择「允许」。'}</Text>
+          <Text style={styles.helperText}>{calendarAuthorized ? '已允许访问日历，接下来自动连接手机日历。' : '请在接下来的手机提示中授权日历。'}</Text>
+          <Text style={styles.calendarPermissionWarning}>重要：请选择「允许」或「完全允许」！不要选择「只允许创建」或部分授权，否则可能无法核对、更新或取消随访提醒。</Text>
           <PrimaryButton title={calendarAuthorized ? '连接日历提醒' : '开启日历提醒'} icon={{ ios: 'calendar', android: 'calendar_month' }} loading={busy} disabled={busy} onPress={onCalendar} />
         </View> : null}
         {notificationMissing ? <View style={styles.permissionItem}>
@@ -2035,6 +2001,7 @@ export default function App() {
 
 const styles = StyleSheet.create({
 
+  calendarPermissionWarning: { color: '#B42318', fontWeight: '900', fontSize: 14, lineHeight: 21, marginTop: 9, marginBottom: 7 },
   // Calm healthcare visuals: large touch targets, icon-led cards and plain language.
   featureIcon: { width: 43, height: 43, borderRadius: 14, backgroundColor: '#E5F7F3', alignItems: 'center', justifyContent: 'center', marginRight: 12 },
   featureHeading: { flexDirection: 'row', alignItems: 'center', minHeight: 44, marginVertical: 2 },
