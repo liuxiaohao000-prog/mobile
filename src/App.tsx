@@ -86,6 +86,7 @@ import {
 import { dateKey, formatLocalDateTime, parseLocalDate, parseLocalDateTime } from './domain/dates';
 import { STUDY_PROTOCOL_VERSION } from './config/studyProtocol';
 import { theme, typeScale } from './theme';
+import { TodayFollowupPopup } from './TodayFollowupPopup';
 import {
   EMPTY_CLINICAL_INFO,
   type AiResult,
@@ -2032,6 +2033,8 @@ export default function App() {
   const [tasks, setTasks] = useState<FollowupTask[]>([]);
   const [screenings, setScreenings] = useState<Screening[]>([]);
   const [refreshing, setRefreshing] = useState(false);
+  const [todayPopupVisible, setTodayPopupVisible] = useState(false);
+  const todayPopupShown = useRef(false);
   const initializationInProgress = useRef(false);
   const initializationComplete = useRef(false);
   const exactAlarmPermissionRef = useRef<boolean | null>(null);
@@ -2151,6 +2154,12 @@ export default function App() {
     return () => subscription.remove();
   }, [checkBackupAccessAndInitialize]);
 
+  useEffect(() => {
+    if (!ready || todayPopupShown.current) return;
+    todayPopupShown.current = true;
+    setTodayPopupVisible(true);
+  }, [ready]);
+
   const goTab = (next: Tab) => {
     setTab(next);
     setPage({ kind: 'tab' });
@@ -2229,6 +2238,7 @@ export default function App() {
       </View>
       <View style={styles.fill}>{content}</View>
       {page.kind === 'tab' ? <TabBar active={tab} onChange={goTab} /> : null}
+      <TodayFollowupPopup visible={todayPopupVisible} tasks={tasks} onClose={() => setTodayPopupVisible(false)} onOpenFollowups={() => { setTodayPopupVisible(false); goTab('followups'); }} />
     </SafeAreaView>
   );
 }
