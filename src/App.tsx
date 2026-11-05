@@ -1525,6 +1525,7 @@ function PermissionGuide({ calendarMissing, notificationMissing, busy, onCalenda
   return <Modal visible transparent animationType="fade" onRequestClose={onDismiss}>
     <View style={styles.permissionOverlay}>
       <View style={styles.permissionPanel}>
+        <ScrollView contentContainerStyle={{ gap: 13 }} showsVerticalScrollIndicator={false}>
         <FeatureHeading title="让今日随访为你做好提醒" subtitle="只需要简单开启一次，已授权的功能不再打扰你" ios="checkmark.shield.fill" android="verified_user" />
         <Text style={styles.permissionIntro}>这些权限只用于提醒和顶部统计，不会把患者资料发送到外部。</Text>
         {calendarMissing ? <View style={styles.permissionItem}>
@@ -1539,6 +1540,7 @@ function PermissionGuide({ calendarMissing, notificationMissing, busy, onCalenda
         </View> : null}
         <PrimaryButton title="稍后再说，先进入应用" secondary disabled={busy} onPress={onDismiss} />
         <Text style={styles.permissionFootnote}>你可以先使用患者和随访功能。下次进入时，缺少的授权会再次提醒。</Text>
+        </ScrollView>
       </View>
     </View>
   </Modal>;
