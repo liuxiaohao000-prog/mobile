@@ -1451,7 +1451,8 @@ function SettingsPage({ onRefresh }: Props) {
         >
           <FeatureHeading title="守护你的数据" subtitle="患者资料加密保存，按原设置自动备份" ios="externaldrive.fill.badge.checkmark" android="verified_user" />
           <Text style={styles.helperText}>第一次选择备份文件夹，以后会自动保存。换手机或重装时，选回原来的文件夹就可以尝试恢复。</Text>
-          <Text style={styles.helperText}>备份目录：{backupDirectoryName ?? '未设置'}</Text>
+          <Text style={styles.helperText}>备份位置：{backupDirectoryName ?? '尚未设置（请尽快选择）'}</Text>
+          <Text style={styles.helperText}>这里显示手机授权的完整文件夹位置；重新安装后，请再次选择这个文件夹来恢复资料。</Text>
           <View style={{ height: 12 }} />
           <PrimaryButton
             title={changingBackupDirectory ? '正在打开文件夹选择器…' : '选择或更改备份文件夹'}
@@ -1809,7 +1810,12 @@ export default function App() {
     try {
       const granted = await requestAutomaticBackupAccess();
       setBackupAccessGranted(granted);
-      if (granted) await checkBackupAccessAndInitialize();
+      if (granted) {
+        await checkBackupAccessAndInitialize();
+        // The database may already be open on an upgrade with no prior
+        // folder; start the backup listener and immediate checkpoint then.
+        startAutomaticBackup(await getDatabase());
+      }
     } catch (error) {
       Alert.alert(
         '备份文件夹未设置',
