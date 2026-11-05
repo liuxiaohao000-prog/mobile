@@ -454,6 +454,37 @@ export async function recordConsent(
   });
 }
 
+/**
+ * Keep a declined decision in the existing consent and screening tables
+ * without creating a patient or scheduling any follow-up. No schema migration.
+ */
+export async function recordDeclinedRegistration(input: {
+  name: string;
+  age?: number;
+  gender?: Gender;
+  notes?: string;
+  actor: string;
+}): Promise<void> {
+  const name = input.name.trim();
+  if (!name) throw new Error('请填写患者姓名。');
+  const database = await getDatabase();
+  const screeningId = Crypto.randomUUID();
+  const now = new Date().toISOString();
+  await database.withTransactionAsync(async () => {
+    await database.runAsync(
+      'INSERT INTO screening_case(id, name, age, gender, clinical_json, ecg_path, status, version, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      screeningId, name, input.age ?? 0, input.gender ?? '其他',
+      JSON.stringify({ ...EMPTY_CLINICAL_INFO, investigatorNotes: input.notes?.trim() ?? '' }),
+      '', 'CLOSED', 1, now, now,
+    );
+    await database.runAsync(
+      'INSERT INTO consent_record(id, screening_id, decision, evidence_path, actor, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+      Crypto.randomUUID(), screeningId, 'DECLINED', null, input.actor, now,
+    );
+    await addAudit(database, 'CONSENT_RECORDED', 'screening', screeningId, input.actor, { decision: 'DECLINED', enrollmentCreated: false });
+  });
+}
+
 export class DuplicatePatientError extends Error {
   constructor() {
     super('同一研究项目内已存在姓名和电话相同的患者，请检查已有记录。');
