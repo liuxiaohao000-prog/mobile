@@ -24,6 +24,7 @@ import { File, Paths } from 'expo-file-system';
 import { SymbolView } from 'expo-symbols';
 import {
   addExistingPatient,
+  updatePatientDetails,
   recordDeclinedRegistration,
   exitPatient,
   getDashboardSummary,
@@ -49,10 +50,6 @@ import {
   startAutomaticBackup,
 } from './services/automaticBackup';
 import { configureNotifications, refreshLocalReminders } from './services/notifications';
-import {
-  getOperatorName,
-  setOperatorName,
-} from './services/settings';
 import {
   getBackgroundMonitorState,
   setBackgroundMonitorEnabled,
@@ -575,7 +572,7 @@ async function reconcileAfterPatientMutation(): Promise<string | null> {
   }
 }
 
-function PatientEntryPage({ onOpen, onBack, onRefresh, actor }: BackProps & { actor: string }) {
+function PatientEntryPage({ onOpen, onBack, onRefresh }: BackProps) {
   const [step, setStep] = useState<1 | 2>(1);
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
@@ -790,11 +787,10 @@ function PatientListPage({ onOpen }: Props) {
 
 function PatientDetailPage({
   id,
-  actor,
   onBack,
   onOpen,
   onRefresh,
-}: BackProps & { id: string; actor: string }) {
+}: BackProps & { id: string }) {
   const [patient, setPatient] = useState<Patient>();
   const [exitBusy, setExitBusy] = useState(false);
   const [tasks, setTasks] = useState<FollowupTask[]>([]);
@@ -1198,8 +1194,6 @@ function SettingsDisclosure({
 }
 
 function SettingsPage({ onRefresh }: Props) {
-  const [actor, setActor] = useState('本机操作人');
-  const [saved, setSaved] = useState(false);
   const [calendarReminder, setCalendarReminder] = useState<CalendarReminderStatus | null>(null);
   const [calendarBusy, setCalendarBusy] = useState(false);
   const [calendarOptions, setCalendarOptions] = useState<WritableCalendar[]>([]);
@@ -1228,10 +1222,8 @@ function SettingsPage({ onRefresh }: Props) {
 
   useEffect(() => {
     void Promise.all([
-      getOperatorName(), getAutomaticBackupDirectoryName(),
-      refreshCalendarStatus(), refreshMonitorStatus(),
-    ]).then(([operator, folder]) => {
-      setActor(operator);
+      getAutomaticBackupDirectoryName(), refreshCalendarStatus(), refreshMonitorStatus(),
+    ]).then(([folder]) => {
       setBackupDirectoryName(folder);
     }).catch(error => console.warn('Settings status refresh failed:', error));
     const subscription = AppState.addEventListener('change', state => {
@@ -1348,15 +1340,6 @@ function SettingsPage({ onRefresh }: Props) {
       Alert.alert('监测设置失败', error instanceof Error ? error.message : '请检查系统通知设置。');
     } finally {
       setMonitorBusy(false);
-    }
-  };
-
-  const save = async () => {
-    try {
-      await setOperatorName(actor);
-      setSaved(true);
-    } catch (error) {
-      Alert.alert('保存失败', error instanceof Error ? error.message : '请重试。');
     }
   };
 
@@ -1615,7 +1598,7 @@ export default function App() {
   const skippedBackupOnboarding = useRef(false);
   const [page, setPage] = useState<Route>({ kind: 'tab' });
   const [tab, setTab] = useState<Tab>('home');
-  const [actor, setActor] = useState('本机操作人');
+
   const [summary, setSummary] = useState<DashboardSummary>({ activePatients: 0, dueTasks: 0, overdueTasks: 0 });
   const [tasks, setTasks] = useState<FollowupTask[]>([]);
   const [screenings, setScreenings] = useState<Screening[]>([]);
@@ -1724,17 +1707,15 @@ export default function App() {
   const refresh = useCallback(async (forceReminderReschedule = false) => {
     try {
       setRefreshing(true);
-      const [nextSummary, nextTasks, nextScreenings, operator, contacts] = await Promise.all([
+      const [nextSummary, nextTasks, nextScreenings, contacts] = await Promise.all([
         getDashboardSummary(),
         getTasks(),
         listScreenings(),
-        getOperatorName(),
         listDueFollowupContacts(),
       ]);
       setSummary(nextSummary);
       setTasks(nextTasks);
       setScreenings(nextScreenings);
-      setActor(operator);
       setTodayContacts(contacts);
       if (briefingPendingRef.current) {
         briefingPendingRef.current = false;
@@ -1952,13 +1933,13 @@ export default function App() {
     }
   } else if (page.kind === 'patientEntry' || page.kind === 'existingPatient' || page.kind === 'screening' ||
     page.kind === 'result' || page.kind === 'consent' || page.kind === 'enrollment') {
-    content = <PatientEntryPage actor={actor} onOpen={setPage} onRefresh={refresh} onBack={() => setPage({ kind: 'tab' })} />;
+    content = <PatientEntryPage onOpen={setPage} onRefresh={refresh} onBack={() => setPage({ kind: 'tab' })} />;
   } else if (page.kind === 'patient') {
-    content = <PatientDetailPage id={page.id} actor={actor} onBack={() => setPage({ kind: 'tab' })} onOpen={setPage} onRefresh={refresh} />;
+    content = <PatientDetailPage id={page.id} onBack={() => setPage({ kind: 'tab' })} onOpen={setPage} onRefresh={refresh} />;
   } else if (page.kind === 'task') {
     content = <TaskDetailPage id={page.id} onBack={() => setPage({ kind: 'tab' })} onOpen={setPage} onRefresh={refresh} />;
   } else {
-    content = <FollowupRecordPage id={page.id} actor={actor} onBack={() => setPage({ kind: 'tab' })} onOpen={setPage} onRefresh={refresh} />;
+    content = <FollowupRecordPage id={page.id} onBack={() => setPage({ kind: 'tab' })} onOpen={setPage} onRefresh={refresh} />;
   }
 
   return (
