@@ -597,14 +597,15 @@ function TodayFollowupDialog({
 
 function HomePage({
   summary, tasks, onOpen, onRefresh,
-}: Props & { summary: DashboardSummary; tasks: FollowupTask[]; screenings: Screening[] }) {
+  onOpenFollowups,
+}: Props & { summary: DashboardSummary; tasks: FollowupTask[]; screenings: Screening[]; onOpenFollowups: () => void }) {
   return (
     <FollowupCalendarHome
       summary={summary}
       tasks={tasks}
       onOpenTask={(id) => onOpen({ kind: 'task', id })}
       onAddPatient={() => onOpen({ kind: 'patientEntry' })}
-      onOpenFollowups={() => onOpen({ kind: 'tab' })}
+      onOpenFollowups={onOpenFollowups}
       onRefresh={() => { void onRefresh(); }}
     />
   );
@@ -831,8 +832,8 @@ function TaskCard({ task, onPress }: { task: FollowupTask; onPress: () => void }
   );
 }
 
-function HomeTab({ summary, tasks, screenings, onOpen, onRefresh }: Props & { summary: DashboardSummary; tasks: FollowupTask[]; screenings: Screening[] }) {
-  return <HomePage summary={summary} tasks={tasks} screenings={screenings} onOpen={onOpen} onRefresh={onRefresh} />;
+function HomeTab({ summary, tasks, screenings, onOpen, onRefresh, onOpenFollowups }: Props & { summary: DashboardSummary; tasks: FollowupTask[]; screenings: Screening[]; onOpenFollowups: () => void }) {
+  return <HomePage summary={summary} tasks={tasks} screenings={screenings} onOpen={onOpen} onRefresh={onRefresh} onOpenFollowups={onOpenFollowups} />;
 }
 
 function ScreeningPage({
@@ -2637,7 +2638,7 @@ export default function App() {
   let content: React.ReactNode;
   if (page.kind === 'tab') {
     if (tab === 'home') {
-      content = <HomeTab summary={summary} tasks={tasks} screenings={screenings} onOpen={setPage} onRefresh={refresh} />;
+      content = <HomeTab summary={summary} tasks={tasks} screenings={screenings} onOpen={setPage} onRefresh={refresh} onOpenFollowups={() => goTab('followups')} />;
     } else if (tab === 'patients') {
       content = <PatientListPage onOpen={setPage} onRefresh={refresh} />;
     } else if (tab === 'followups') {
