@@ -2,6 +2,7 @@ import * as Crypto from 'expo-crypto';
 import { getDatabase } from './database';
 import { patientFingerprint } from './identity';
 import { addCalendarMonthsClamped, getFollowupStatus, parseLocalDate, dateKey } from '../domain/dates';
+import { EMPTY_CLINICAL_INFO } from '../types';
 import type {
   AiResult,
   AnalysisRun,
