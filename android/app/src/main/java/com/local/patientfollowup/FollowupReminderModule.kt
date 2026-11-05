@@ -108,6 +108,24 @@ class FollowupReminderModule(
   }
 
   @ReactMethod
+  fun openNextCalendarReminder(promise: Promise) {
+    try { promise.resolve(FollowupCalendarSync.openNextReminder(reactContext)) }
+    catch (error: Throwable) { promise.reject("CALENDAR_OPEN_FAILED", error.message, error) }
+  }
+
+  @ReactMethod
+  fun createCalendarRingingTest(promise: Promise) {
+    try { promise.resolve(FollowupCalendarSync.createTestEvent(reactContext).toString()) }
+    catch (error: Throwable) { promise.reject("CALENDAR_TEST_FAILED", error.message, error) }
+  }
+
+  @ReactMethod
+  fun openCalendarRingingTest(promise: Promise) {
+    try { promise.resolve(FollowupCalendarSync.openTestEvent(reactContext)) }
+    catch (error: Throwable) { promise.reject("CALENDAR_TEST_OPEN_FAILED", error.message, error) }
+  }
+
+  @ReactMethod
   fun prepareNotificationChannel(promise: Promise) {
     try {
       LocalFollowupAlarm.ensureNotificationChannel(reactContext)
