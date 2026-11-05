@@ -1581,9 +1581,23 @@ function BackupAccessGate({ busy, onRequest, hasExistingData }: { busy: boolean;
               <Text style={styles.helperText}>进入文件夹后点击「使用此文件夹」和「允许」。有旧备份会尝试恢复，没有旧备份会自动加密保存新资料。</Text>
             </View>
           </View>
-          <PrimaryButton title={busy ? '正在打开文件夹…' : hasExistingData ? '选择文件夹，开启自动备份' : '选择或新建「今日随访」文件夹'}
-            icon={{ ios: 'folder', android: 'folder_open' }}
+          <Text style={[styles.helperText, { fontWeight: '800', color: theme.primaryDark }]}>推荐 · 用以前的备份找回患者资料</Text>
+          <PrimaryButton title={busy ? '正在打开文件夹…' : '使用已有备份（推荐）'}
+            icon={{ ios: 'arrow.counterclockwise', android: 'restore' }}
             onPress={onRequest} disabled={busy} loading={busy} />
+          <View style={{ height: 9 }} />
+          <PrimaryButton title="没有旧备份 · 创建新文件夹" secondary disabled={busy}
+            icon={{ ios: 'folder.badge.plus', android: 'create_new_folder' }}
+            onPress={() => Alert.alert(
+              '请先确认没有旧备份',
+              hasExistingData
+                ? '检测到这台手机已有患者资料！建议先找到以前的备份文件夹，避免旧资料丢失。若只是想给现有资料新建备份目录，也可以继续。\\n\\n新建方法：进入「文档」或「下载」→ 点「新建文件夹」→ 输入「今日随访」→ 进入文件夹 → 选「使用此文件夹」并允许。'
+                : '如果以前安装并使用过「今日随访」或「研伴」，建议优先选择原来的备份文件夹，这样才能尝试恢复旧患者资料。\\n\\n只有确定没有旧备份时才新建：打开「文档」或「下载」→ 点「新建文件夹」→ 输入「今日随访」→ 进入文件夹 → 选「使用此文件夹」并允许。',
+              [
+                { text: '返回找旧备份', style: 'cancel' },
+                { text: '确定新建文件夹', onPress: onRequest },
+              ],
+            )} />
           <Text style={styles.privacyNote}>请先完成文件夹设置再开始使用，防止资料只存留在 App 内。卸载 App 会删除应用内数据，但你授权的公共备份文件夹通常不会随之删除。</Text>
         </Card>
       </ScrollView>
