@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.ContentUris
 import android.content.ContentValues
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.provider.CalendarContract
 import androidx.core.content.ContextCompat
@@ -33,6 +34,8 @@ internal object FollowupCalendarSync {
   private const val EVENT_TITLE = "研伴 · 今日随访提醒"
   private const val EVENT_DESCRIPTION = "今天有随访任务，请打开研伴查看。"
   private const val EVENT_MARKER = "YANBAN_FOLLOWUP_REMINDER_V1"
+  private const val KEY_TEST_EVENT = "test_event"
+  private const val TEST_TITLE = "研伴 · 日历响铃测试"
 
   private fun prefs(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
   private fun allowed(context: Context): Boolean =
@@ -58,15 +61,27 @@ internal object FollowupCalendarSync {
       CalendarContract.Calendars.ACCOUNT_NAME,
       CalendarContract.Calendars.CALENDAR_ACCESS_LEVEL,
       CalendarContract.Calendars.VISIBLE,
+      CalendarContract.Calendars.ACCOUNT_TYPE,
     )
     context.contentResolver.query(CalendarContract.Calendars.CONTENT_URI, projection, null, null, null)?.use { cursor ->
       while (cursor.moveToNext()) {
         val access = cursor.getInt(3)
-        if (access < CalendarContract.Calendars.CAL_ACCESS_CONTRIBUTOR || cursor.getInt(4) == 0) continue
+        // VISIBLE is a display preference, not a calendar write permission.
+        if (access < CalendarContract.Calendars.CAL_ACCESS_CONTRIBUTOR) continue
+        val display = cursor.getString(1) ?: "日历"
+        val account = cursor.getString(2) ?: ""
+        val accountType = cursor.getString(5) ?: ""
+        val special = Regex("birthday|anniversary|countdown|生日|纪念日|倒数|boss直聘", RegexOption.IGNORE_CASE)
+          .containsMatchIn(display + " " + account)
+        val local = accountType == CalendarContract.ACCOUNT_TYPE_LOCAL ||
+          account.equals("local account", ignoreCase = true) ||
+          (accountType.isBlank() && display.contains("local", ignoreCase = true))
         result.pushMap(Arguments.createMap().apply {
           putString("id", cursor.getLong(0).toString())
-          putString("name", cursor.getString(1) ?: "日历")
-          putString("account", cursor.getString(2) ?: "")
+          putString("name", display)
+          putString("account", account)
+          putBoolean("isLocal", local)
+          putBoolean("isSpecial", special)
         })
       }
     }
@@ -77,7 +92,7 @@ internal object FollowupCalendarSync {
     val projection = arrayOf(CalendarContract.Calendars.CALENDAR_ACCESS_LEVEL)
     context.contentResolver.query(
       CalendarContract.Calendars.CONTENT_URI, projection,
-      "${CalendarContract.Calendars._ID} = ? AND ${CalendarContract.Calendars.VISIBLE} = 1",
+      "${CalendarContract.Calendars._ID} = ?",
       arrayOf(calendarId.toString()), null,
     )?.use { cursor ->
       if (cursor.moveToFirst()) return cursor.getInt(0) >= CalendarContract.Calendars.CAL_ACCESS_CONTRIBUTOR
@@ -108,14 +123,31 @@ internal object FollowupCalendarSync {
     return status(context)
   }
 
+  // Persisted IDs are Yanban-owned; also verify title/description before editing.
   private fun isOwned(context: Context, id: Long): Boolean {
     context.contentResolver.query(
       ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI, id),
-      arrayOf(CalendarContract.Events.DESCRIPTION), null, null, null,
+      arrayOf(CalendarContract.Events.TITLE, CalendarContract.Events.DESCRIPTION),
+      null, null, null,
     )?.use { cursor ->
-      if (cursor.moveToFirst()) return (cursor.getString(0) ?: "").contains(EVENT_MARKER)
+      if (cursor.moveToFirst()) {
+        val title = cursor.getString(0) ?: ""
+        val description = cursor.getString(1) ?: ""
+        return title == EVENT_TITLE &&
+          (description.contains(EVENT_MARKER) || description == EVENT_DESCRIPTION)
+      }
     }
     return false
+  }
+
+  private fun removeLegacyMarker(context: Context, id: Long) {
+    if (!isOwned(context, id)) return
+    val values = ContentValues().apply {
+      put(CalendarContract.Events.DESCRIPTION, EVENT_DESCRIPTION)
+    }
+    context.contentResolver.update(
+      ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI, id), values, null, null,
+    )
   }
 
   private fun removeOwned(context: Context, id: Long) {
@@ -137,7 +169,7 @@ internal object FollowupCalendarSync {
     val values = ContentValues().apply {
       put(CalendarContract.Events.CALENDAR_ID, calendarId)
       put(CalendarContract.Events.TITLE, EVENT_TITLE)
-      put(CalendarContract.Events.DESCRIPTION, EVENT_DESCRIPTION + "\n" + EVENT_MARKER)
+      put(CalendarContract.Events.DESCRIPTION, EVENT_DESCRIPTION)
       put(CalendarContract.Events.DTSTART, startAt)
       put(CalendarContract.Events.DTEND, startAt + 15 * 60_000L)
       put(CalendarContract.Events.EVENT_TIMEZONE, TimeZone.getDefault().id)
@@ -159,6 +191,78 @@ internal object FollowupCalendarSync {
       throw error
     }
     return eventId
+  }
+
+  fun openNextReminder(context: Context): Boolean {
+    val mapping = JSONObject(prefs(context).getString(KEY_EVENTS, "{}") ?: "{}")
+    val candidates = mutableListOf<Pair<String, Long>>()
+    for (key in mapping.keys()) {
+      val id = mapping.optLong(key, -1L)
+      if (id > 0 && isOwned(context, id)) candidates.add(key to id)
+    }
+    val chosen = candidates.minByOrNull { it.first } ?: return false
+    context.startActivity(Intent(Intent.ACTION_VIEW).apply {
+      data = ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI, chosen.second)
+      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    })
+    return true
+  }
+
+  // METHOD_ALERT schedules a standard calendar notification; OPPO's separate
+  // "响铃提醒" switch is owned by the calendar app and cannot be forced here.
+  fun createTestEvent(context: Context): Long {
+    if (!allowed(context)) throw SecurityException("请先允许研伴访问日历。")
+    val p = prefs(context)
+    val calendarId = p.getString(KEY_CALENDAR_ID, null)?.toLongOrNull()
+      ?: throw IllegalStateException("请先选择一个日历。")
+    if (!isWritable(context, calendarId)) throw IllegalStateException("所选日历不可写。")
+    val previous = p.getLong(KEY_TEST_EVENT, -1L)
+    if (previous > 0) {
+      context.contentResolver.query(ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI, previous),
+        arrayOf(CalendarContract.Events.TITLE), null, null, null)?.use { cursor ->
+        if (cursor.moveToFirst() && cursor.getString(0) == TEST_TITLE) {
+          context.contentResolver.delete(
+            ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI, previous), null, null)
+        }
+      }
+    }
+    val startAt = System.currentTimeMillis() + 2 * 60_000L
+    val values = ContentValues().apply {
+      put(CalendarContract.Events.CALENDAR_ID, calendarId)
+      put(CalendarContract.Events.TITLE, TEST_TITLE)
+      put(CalendarContract.Events.DESCRIPTION, "请观察手机日历是否响铃。测试后可在日历中删除。")
+      put(CalendarContract.Events.DTSTART, startAt)
+      put(CalendarContract.Events.DTEND, startAt + 5 * 60_000L)
+      put(CalendarContract.Events.EVENT_TIMEZONE, TimeZone.getDefault().id)
+      put(CalendarContract.Events.HAS_ALARM, 1)
+    }
+    val uri = context.contentResolver.insert(CalendarContract.Events.CONTENT_URI, values)
+      ?: throw IllegalStateException("手机日历无法创建测试日程。")
+    val id = ContentUris.parseId(uri)
+    try {
+      val reminder = ContentValues().apply {
+        put(CalendarContract.Reminders.EVENT_ID, id)
+        put(CalendarContract.Reminders.MINUTES, 0)
+        put(CalendarContract.Reminders.METHOD, CalendarContract.Reminders.METHOD_ALERT)
+      }
+      context.contentResolver.insert(CalendarContract.Reminders.CONTENT_URI, reminder)
+        ?: throw IllegalStateException("此日历不支持标准提醒。")
+    } catch (error: Exception) {
+      context.contentResolver.delete(uri, null, null)
+      throw error
+    }
+    p.edit().putLong(KEY_TEST_EVENT, id).commit()
+    return id
+  }
+
+  fun openTestEvent(context: Context): Boolean {
+    val id = prefs(context).getLong(KEY_TEST_EVENT, -1L)
+    if (id <= 0) return false
+    context.startActivity(Intent(Intent.ACTION_VIEW).apply {
+      data = ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI, id)
+      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    })
+    return true
   }
 
   /**
@@ -183,7 +287,10 @@ internal object FollowupCalendarSync {
     val next = JSONObject()
     for (key in saved.keys()) {
       val id = saved.optLong(key, -1)
-      if (id > 0 && key in desired && isOwned(context, id)) next.put(key, id)
+      if (id > 0 && key in desired && isOwned(context, id)) {
+        next.put(key, id)
+        removeLegacyMarker(context, id)
+      }
       else if (id > 0 && key !in desired) removeOwned(context, id)
     }
     // Persist incrementally: failed writes can be retried without duplicated dates.
