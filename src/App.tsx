@@ -126,6 +126,7 @@ function PrimaryButton({
   onPress,
   disabled,
   secondary,
+  gray,
   danger,
   loading,
   icon,
@@ -134,6 +135,7 @@ function PrimaryButton({
   onPress: () => void;
   disabled?: boolean;
   secondary?: boolean;
+  gray?: boolean;
   danger?: boolean;
   loading?: boolean;
   icon?: { ios: string; android: string };
@@ -146,19 +148,21 @@ function PrimaryButton({
       style={[
         styles.button,
         secondary && styles.buttonSecondary,
+        gray && styles.buttonGray,
         danger && styles.buttonDanger,
         disabled && styles.buttonDisabled,
       ]}
     >
       <View style={styles.buttonContent}>
-        {loading ? <ActivityIndicator size="small" color={secondary ? theme.primaryDark : '#FFFFFF'} /> : icon ? (
+        {loading ? <ActivityIndicator size="small" color={secondary || gray ? '#41515B' : '#FFFFFF'} /> : icon ? (
           <SymbolView name={{ ios: icon.ios as never, android: icon.android as never, web: icon.android as never }}
-            size={19} tintColor={secondary ? theme.primaryDark : '#FFFFFF'} />
+            size={19} tintColor={secondary || gray ? '#41515B' : '#FFFFFF'} />
         ) : null}
         <Text
           style={[
             styles.buttonText,
             secondary && styles.buttonSecondaryText,
+            gray && styles.buttonGrayText,
             danger && styles.buttonText,
           ]}
         >
@@ -1586,7 +1590,7 @@ function BackupAccessGate({ busy, onRequest, hasExistingData }: { busy: boolean;
             icon={{ ios: 'arrow.counterclockwise', android: 'restore' }}
             onPress={onRequest} disabled={busy} loading={busy} />
           <View style={{ height: 9 }} />
-          <PrimaryButton title="没有旧备份 · 创建新文件夹" secondary disabled={busy}
+          <PrimaryButton title="没有旧备份 · 创建新文件夹" gray disabled={busy}
             icon={{ ios: 'folder.badge.plus', android: 'create_new_folder' }}
             onPress={() => Alert.alert(
               '请先确认没有旧备份',
@@ -2184,6 +2188,8 @@ const styles = StyleSheet.create({
   calendarHint: { color: theme.muted, fontSize: 13, textAlign: 'right', marginTop: 7 },
   button: { backgroundColor: theme.primary, borderRadius: 16, minHeight: 52, paddingHorizontal: 16, alignItems: 'center', justifyContent: 'center', shadowColor: '#108B87', shadowOpacity: 0.12, shadowRadius: 8, elevation: 1 },
   buttonSecondary: { backgroundColor: '#E6F8F4', shadowOpacity: 0, elevation: 0 },
+  buttonGray: { backgroundColor: '#EFF1F3', borderWidth: 1, borderColor: '#DBE0E5', shadowOpacity: 0, elevation: 0 },
+  buttonGrayText: { color: '#52616A' },
   buttonDanger: { backgroundColor: theme.danger },
   buttonDisabled: { opacity: 0.55 },
   buttonContent: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
