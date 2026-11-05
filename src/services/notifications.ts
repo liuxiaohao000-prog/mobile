@@ -22,6 +22,7 @@ export type ReminderDiagnostics = {
   notificationsEnabled: boolean;
   exactAlarmAllowed: boolean;
   channelImportance: number;
+  channelLockscreenVisibility: number;
   testNotificationPostedAt: number;
   testReceiverReceivedAt: number;
   testServiceEnteredAt: number;
