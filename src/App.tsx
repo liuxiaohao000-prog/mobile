@@ -1581,42 +1581,43 @@ function PermissionGuide({ calendarMissing, calendarAuthorized, notificationMiss
   </Modal>;
 }
 
-function BackupAccessGate({ busy, onRequest, onSkip }: { busy: boolean; onRequest: () => void; onSkip: () => void }) {
+function BackupAccessGate({ busy, onRequest, hasExistingData }: { busy: boolean; onRequest: () => void; hasExistingData: boolean }) {
   return (
     <SafeAreaView style={styles.safe}>
       <StatusBar barStyle="dark-content" />
       <ScrollView contentContainerStyle={styles.pageContent}>
-        <FeatureHeading title="欢迎使用今日随访" subtitle="先确认是否有以前的患者资料" ios="externaldrive.fill.badge.checkmark" android="shield" />
+        <FeatureHeading title="先保护好患者资料" subtitle="只需设置一次，以后自动加密备份" ios="externaldrive.fill.badge.checkmark" android="shield" />
         <View style={styles.pageAccent} />
         <Card>
-          <FeatureHeading title="有旧数据？先找回来" subtitle="换手机或重新安装，请先恢复再登记新患者" ios="arrow.clockwise.icloud" android="restore" />
+          <FeatureHeading title={hasExistingData ? '原有资料需要备份' : '第一次使用？先创建备份文件夹'}
+            subtitle={hasExistingData ? '原来的患者资料仍在手机中，请设置备份位置' : '有旧备份选旧文件夹；没有就新建「今日随访」'}
+            ios="folder.badge.plus" android="create_new_folder" />
+          <Text style={styles.helperText}>资料只保存在你的手机和你选择的文件夹中，不会自动上传。文件采用加密方式保存，请保护手机和备份文件，不要随意分享。</Text>
           <View style={styles.backupStep}>
             <Text style={styles.backupStepNo}>1</Text>
             <View style={{ flex: 1 }}>
-              <Text style={styles.backupStepTitle}>打开备份文件夹</Text>
-              <Text style={styles.helperText}>点击下方按钮，找到之前存放备份的文件夹。</Text>
+              <Text style={styles.backupStepTitle}>打开手机文件夹</Text>
+              <Text style={styles.helperText}>点下面的按钮，手机会打开文件夹选择界面。</Text>
             </View>
           </View>
           <View style={styles.backupStep}>
             <Text style={styles.backupStepNo}>2</Text>
             <View style={{ flex: 1 }}>
-              <Text style={styles.backupStepTitle}>点击「使用此文件夹」</Text>
-              <Text style={styles.helperText}>手机会请你确认授权，选择「允许」即可。</Text>
+              <Text style={styles.backupStepTitle}>没有旧备份就新建「今日随访」</Text>
+              <Text style={styles.helperText}>在「下载」或「Documents／文档」中新建名为「今日随访」的文件夹。若有旧备份，请选择原来的文件夹，不要新建。</Text>
             </View>
           </View>
           <View style={styles.backupStep}>
             <Text style={styles.backupStepNo}>3</Text>
             <View style={{ flex: 1 }}>
-              <Text style={styles.backupStepTitle}>自动查找旧资料</Text>
-              <Text style={styles.helperText}>今日随访会尝试恢复，不需要逐个选择备份文件。</Text>
+              <Text style={styles.backupStepTitle}>授权文件夹，自动保护数据</Text>
+              <Text style={styles.helperText}>进入文件夹后点击「使用此文件夹」和「允许」。有旧备份会尝试恢复，没有旧备份会自动加密保存新资料。</Text>
             </View>
           </View>
-          <PrimaryButton title={busy ? '正在打开文件夹…' : '选择备份文件夹，恢复旧资料'}
+          <PrimaryButton title={busy ? '正在打开文件夹…' : hasExistingData ? '选择文件夹，开启自动备份' : '选择或新建「今日随访」文件夹'}
             icon={{ ios: 'folder', android: 'folder_open' }}
             onPress={onRequest} disabled={busy} loading={busy} />
-          <View style={{ height: 10 }} />
-          <PrimaryButton title="第一次使用，没有旧资料" secondary onPress={onSkip} disabled={busy} />
-          <Text style={styles.privacyNote}>没有旧备份可以直接开始。以后可到「我的 → 数据保护」选择文件夹进行自动加密备份。</Text>
+          <Text style={styles.privacyNote}>请先完成文件夹设置再开始使用，防止资料只存留在 App 内。卸载 App 会删除应用内数据，但你授权的公共备份文件夹通常不会随之删除。</Text>
         </Card>
       </ScrollView>
     </SafeAreaView>
@@ -1647,7 +1648,7 @@ export default function App() {
   const [fatalError, setFatalError] = useState('');
   const [backupAccessGranted, setBackupAccessGranted] = useState<boolean | null>(null);
   const [requestingBackupAccess, setRequestingBackupAccess] = useState(false);
-  const skippedBackupOnboarding = useRef(false);
+  const [hasExistingPatientDatabase, setHasExistingPatientDatabase] = useState(false);
   const [page, setPage] = useState<Route>({ kind: 'tab' });
   const [tab, setTab] = useState<Tab>('home');
 
@@ -1815,11 +1816,11 @@ export default function App() {
     try {
       const granted = await hasAutomaticBackupAccess();
       const existingDatabase = new File(Paths.document, 'SQLite', 'patient-followup.db').exists;
-      // Existing local data must never be locked out for lack of folder access.
-      // On a fresh installation offer an optional restore choice first.
-      const needsRecoveryChoice = !granted && !existingDatabase && !skippedBackupOnboarding.current;
-      setBackupAccessGranted(!needsRecoveryChoice);
-      if (needsRecoveryChoice) {
+      // A persistent SAF folder is mandatory before clinical data entry.
+      // Existing encrypted DB stays untouched while choosing a folder.
+      setHasExistingPatientDatabase(existingDatabase);
+      setBackupAccessGranted(granted);
+      if (!granted) {
         setReady(false);
         return;
       }
@@ -1852,12 +1853,6 @@ export default function App() {
       setRequestingBackupAccess(false);
     }
   }, [checkBackupAccessAndInitialize]);
-
-  const skipBackupSetup = useCallback(() => {
-    skippedBackupOnboarding.current = true;
-    setBackupAccessGranted(true);
-    void initializeAfterBackupAccess();
-  }, [initializeAfterBackupAccess]);
 
   useEffect(() => {
     void checkBackupAccessAndInitialize();
@@ -1967,7 +1962,8 @@ export default function App() {
   }
 
   if (!backupAccessGranted) {
-    return <BackupAccessGate busy={requestingBackupAccess} onRequest={enableBackupAccess} onSkip={skipBackupSetup} />;
+    return <BackupAccessGate busy={requestingBackupAccess}
+      hasExistingData={hasExistingPatientDatabase} onRequest={enableBackupAccess} />;
   }
 
   if (!ready) return <SafeAreaView style={styles.safe}><LoadingView label="正在初始化本地加密空间…" /></SafeAreaView>;
