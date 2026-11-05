@@ -14,7 +14,13 @@ export async function configureNotifications(): Promise<void> {
   // Remove legacy alarm PendingIntents when upgrading. It does not request
   // notification/exact-alarm permissions or create any local reminder.
   if (Platform.OS === 'android') {
-    await nativeCleanup?.cleanupLegacyAlarms?.();
+    try {
+      await nativeCleanup?.cleanupLegacyAlarms?.();
+    } catch (error) {
+      // Never prevent access to encrypted clinical data just because a
+      // deprecated PendingIntent or notification channel cannot be cancelled.
+      console.warn('Legacy alarm cleanup was incomplete:', error);
+    }
   }
 }
 
