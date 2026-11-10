@@ -27,7 +27,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
-      - name: Verify preview release notes
+      - name: Verify stable release notes
         run: |
           node -e "const fs=require('fs');const v=JSON.parse(fs.readFileSync('app.json','utf8')).expo.version;const docs=fs.readFileSync('docs/v2-preview.md','utf8');const readme=fs.readFileSync('README.md','utf8');if(!docs.includes('## V'+v+'：')||!readme.includes('V'+v)){throw new Error('Missing README release notes for V'+v)}"
       - uses: actions/setup-java@v4
@@ -40,7 +40,7 @@ jobs:
         run: |
           "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --channel=3 --install "platforms;android-37.0" "build-tools;36.0.0" "ndk;27.1.12297006"
           yes | "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --licenses || true
-      - name: Build signed preview APK
+      - name: Build signed stable APK
         working-directory: android
         run: |
           chmod +x gradlew
@@ -48,21 +48,24 @@ jobs:
       - name: Copy APK
         run: |
           mkdir -p dist
-          cp android/app/build/outputs/apk/release/app-release.apk dist/yanban-v2-preview.apk
+          cp android/app/build/outputs/apk/release/app-release.apk dist/jinri-suifang-v1.0.0.apk
       - uses: actions/upload-artifact@v4
         with:
-          name: yanban-v2-preview-apk
-          path: dist/yanban-v2-preview.apk
+          name: jinri-suifang-v1.0.0-apk
+          path: dist/jinri-suifang-v1.0.0.apk
           if-no-files-found: error
           retention-days: 14
-      - name: Publish GitHub prerelease APK
+      - name: Publish GitHub stable APK
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/v2/')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="v2.0.18-preview.${GITHUB_RUN_NUMBER}"
-          gh release create "$TAG" dist/yanban-v2-preview.apk \
+          TAG="v1.0.0"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Stable release $TAG already exists; keeping the published artifact unchanged."
+            exit 0
+          fi
+          gh release create "$TAG" dist/jinri-suifang-v1.0.0.apk \
             --target "${GITHUB_SHA}" \
-            --title "研伴 V2.0.18 Preview ${GITHUB_RUN_NUMBER}" \
-            --notes "本版修改参见仓库 README.md 和 docs/v2-preview.md 的 V2.0.18 记录。横幅、锁屏显示需由用户在系统通知设置中开启。尚未完成真机验证，升级前请备份，切勿卸载旧版。" \
-            --prerelease
+            --title "今日随访 V1.0.0 正式版" \
+            --notes "正式版 1.0.0 基于已验收的 2.0.18-preview，仅重新定稿版本与发布方式，无功能改动。保留原包名、原签名、数据库和加密备份。为保护患者数据，请先备份，再直接覆盖安装，不要卸载旧版。详细版本记录见 README.md、docs/v2-preview.md。项目当前 release 签名仍沿用原 debug.keystore，尚非应用商店专用签名。"
