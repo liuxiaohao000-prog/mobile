@@ -1,3 +1,16 @@
+# 今日随访版本发布记录
+
+## V1.0.0：正式版发布（基于 V2.0.18 Preview，2026-11-10）
+
+- **仅执行版本定稿与正式发布，不新增、删除或修改患者、随访、日历提醒、后台监测、备份、恢复及 UI 功能。** 功能完全沿用 2.0.18-preview，仍是患者本机 SQLCipher 加密数据与手动授权的外部备份文件夹。
+- Expo `app.json` `version=1.0.0`；npm `package.json` / `package-lock.json` `version=1.0.0`；Android Gradle `versionName=1.0.0`，`versionCode=35`（原 2.0.18-preview 为 34）；「我的 → 关于」显示 `1.0.0`。
+- **保持可覆盖安装**：Android `applicationId=com.local.patientfollowup`、原 release 构建签名、SQLCipher 数据库路径、SecureStore 密钥和备份 .yfb 格式不变。正式包由既有 `assembleRelease` 构建，不更改签名，以免既有 Preview 用户无法升级、造成数据风险。
+- GitHub Actions 生成非 prerelease 的稳定 Release 标签 `v1.0.0`、名称 `今日随访 V1.0.0 正式版`、安装包 `jinri-suifang-v1.0.0.apk`。若已有同名 Release，工作流不覆盖旧正式安装包。
+- **签名说明**：目前 Gradle release build 使用项目自带 `debug.keystore`，为确保既有安装连续性此次保持不变。因此虽然版本标记为正式版，仍不宜将其直接视为满足应用商店签名、发布审核要求的商店上架包。
+- **核对清单**：`npm ci`、TypeScript、README/docs release notes、Android release APK 构建、GitHub Release 实际附件及文件名、正式版 versionName/versionCode；用户侧覆盖安装前请确认已备份，**严禁先卸载原 App**。
+
+## 历史预览版本记录
+
 # 研伴 V2.0 Preview — 变更、限制与验证
 
 > 仅供内部验证。不要直接用于真实患者数据或临床生产流程；必须完成权限、提醒、恢复、隐私和真机回归测试。
