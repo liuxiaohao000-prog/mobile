@@ -52,7 +52,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: jinri-suifang-v1.0.0-apk
-          path: dist/yanban-v2-preview.apk
+          path: dist/jinri-suifang-v1.0.0.apk
           if-no-files-found: error
           retention-days: 14
       - name: Publish GitHub stable APK
@@ -65,7 +65,7 @@ jobs:
             echo "Stable release $TAG already exists; keeping the published artifact unchanged."
             exit 0
           fi
-          gh release create "$TAG" dist/yanban-v2-preview.apk \
+          gh release create "$TAG" dist/jinri-suifang-v1.0.0.apk \
             --target "${GITHUB_SHA}" \
             --title "今日随访 V1.0.0 正式版" \
             --notes "正式版 1.0.0 基于已验收的 2.0.18-preview，仅重新定稿版本与发布方式，无功能改动。保留原包名、原签名、数据库和加密备份。为保护患者数据，请先备份，再直接覆盖安装，不要卸载旧版。详细版本记录见 README.md、docs/v2-preview.md。项目当前 release 签名仍沿用原 debug.keystore，尚非应用商店专用签名。"
